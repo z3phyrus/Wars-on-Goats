@@ -1,0 +1,32 @@
+# Rust / Cargo
+/target/
+/**/target/
+# If you want to check in Cargo.lock for apps, remove the following line
+Cargo.lock
+
+# Editor directories
+/.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Environment files
+.env
+
+# Build artifacts
+*.rlib
+*.rmeta
+*.dll
+*.dylib
+*.so
+*.exe
+*.pdb
+
+# Logs
+*.log
+
+# Node / web
+node_modules/
+dist/
+/target
