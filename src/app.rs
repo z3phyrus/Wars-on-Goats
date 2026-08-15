@@ -45,7 +45,7 @@ async fn ws_handler(
     ws.on_upgrade(move |socket| handle_socket(socket, state))
 }
 
-async fn handle_socket(stream: WebSocket, state: SharedState) {
+async fn handle_socket(stream: WebSocket, _state: SharedState) {
     let (mut sender, mut receiver) = stream.split();
     if let Some(Ok(message)) = receiver.next().await {
         if let Message::Text(text) = message {

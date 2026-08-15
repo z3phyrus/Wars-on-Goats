@@ -31,3 +31,7 @@ This repository is a Rust backend skeleton for a 2D Warsong Gulch style capture-
 - Add new payload shapes in `src/types.rs` and keep API contracts stable.
 - Wire SpaceTime DB calls through `SpaceTimeClient` in `src/db.rs`.
 - Preserve the existing route names and JSON shapes unless explicitly changing the API.
+- don't change the branch I've checked out unless I explicitly ask you to.
+- don't commit any changes to the repository unless I explicitly ask you to.
+- ask questions in-line, rather than making me type another command.
+- end all work with a short summary of what you did, and any next steps I should take.
