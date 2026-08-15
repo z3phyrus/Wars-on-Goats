@@ -7,7 +7,7 @@ pub struct Player {
     pub name: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct GameState {
     pub players: Arc<Mutex<HashMap<String, Player>>>,
 }
