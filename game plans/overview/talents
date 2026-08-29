@@ -1,0 +1,30 @@
+Each class has a 2 specialisations, 
+each of which has its own tree of talents that players can choose between when they choose a character preset
+
+each talent tree is laid out in a linear but branching structure, e.g. 
+
+                    X
+            X - X <
+X - X - X <         X
+            X - X < 
+                    X
+        X
+    X <
+X <     X - X - X 
+    X - X - X <
+                X
+   
+each X is a different talent, read left-to-right
+
+When choosing talents, players get a set number of talent-points to spend however they wish
+- the number of talent-points available will be much less than the total talent-points required to gain all talents (so there should be large variance between what players choose as their talents)
+
+
+GUI ideas:
+- #TODO when choosing talents, players have the option of "visualise effect"
+- -- which brings up two smalls screens displaying the effect of the chosen talent.
+- -- e.g. for a talent "double spell AoE", "visualise effect" would:
+- -- -- show a screen with the AoE of the spell currently
+- -- -- show another screen to the side with the AoE of the spell if the talent is chosen
+- -- the visualisation should be done "live"
+- -- -- so that all the current talents the player has chosen are accounted for when doing the representation

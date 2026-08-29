@@ -1,0 +1,37 @@
+2 specialisations / talent trees: Frost Mage & Electric Mage
+
+
+Stealth Rogue overview:
+- hide in the shadows, waiting to strike at opportune moments
+- deal a few instances of high damage
+- avoid direct confrontation -- low health and defense, relies on evasion and cunning
+- damage is mostly single-target, but can crowd-control a bit
+
+Warrior Rogue overview:
+- strong melee damage, focussing on being faster than your enemy
+- expect to take damage while dealing it, can withstand it better than the Stealth Rogue
+- mainly focuses on single targets
+
+
+Stealth Rogue basic abilities:
+- Stealth: movement speed reduced, disappear from sight of enemies while stationary or walking (visibile when jumping or climbing)
+---- Stealth is broken if you take damage or perform an attack (or if you choose to break it manually)
+---- cannot enter/initialise Stealth when enemies are visible (within players field of view)
+- Backstab: (need to be in Stealth before using this ability) deal high damage to an enemy from behind, exit Stealth
+- Incapacitate: (need to be in Stealth before using this ability) enemy becomes incapaciated for 5s (they fall to the ground wherever they got hit, but can't move)
+- Rest Your Eyes: slowly reduce your field of view and heal 
+---- takes 15s, heal 2% health each second, field of view reduces by 3% each second
+---- any movement, damage or used-abilities that occur during this ability causes it to stop
+
+
+Warrior Rogue basic abilities:
+- Rush: quickly charge forwards, dealing a small amount of damage and temporarily stunning any enemies in your path
+- Kick: interrupt a spell being cast (does no damage)
+- Bloodlust: heal half of the damage you deal during the next 5s
+- Double Swing: attack that deals damage twice
+
+
+
+Rogue basic abilities (shared):
+- Large  Strike: a strong melee attack that deals moderate damage to a single target
+- Small Strike: small damage attack to a single target
