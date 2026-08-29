@@ -21,7 +21,7 @@ When choosing talents, players get a set number of talent-points to spend howeve
 
 
 GUI ideas:
-- #TODO when choosing talents, players have the option of "visualise effect"
+- #STRETCHGOAL when choosing talents, players have the option of "visualise effect"
 - -- which brings up two smalls screens displaying the effect of the chosen talent.
 - -- e.g. for a talent "double spell AoE", "visualise effect" would:
 - -- -- show a screen with the AoE of the spell currently
