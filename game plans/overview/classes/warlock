@@ -1,0 +1,34 @@
+2 specialisations / talent trees: Demon Warlock & Acid Warlock
+
+Demon Warlock overview:
+- summon demons to deal damage / get in the way
+- avoid direct contact with enemies
+- mostly small spells to keep enemies at bay and distracted by the summoned demons
+- a small number of large-damage spells that are slow, so require summons to distract the enemy to be able to hit them
+
+
+Acid Warlock overview:
+- most spells have long-term effects 
+- not many large damage spells
+- general aim is to combine long-term effects of various spells to debilitate enemies
+- several area of effect spells, but not much "crowd-control"
+- more willing to take damage, to be able to inflict as much damage to as many enemies as possible
+
+Demon Warlock basic abilities:
+- Large Demon: summon a large, slow demon to fight on your behalf
+- Demon Swarm: summon several small demons to overwhelm your enemies
+- Fire Blast: small fiery explosion in front of you causing small damage and pushing the enemy backwards
+- Demon Explosion: kill all your summoned demons, they explode and deal damage based on what their remaining health was just before the spell was cast
+
+Acid Warlock basic abilities:
+- Acid Breath: spray acid in front of you affecting all enemies in the effected area, causing damage over time (DOT)
+- Venomous Thorns: for a short period of time, any enemies that get close to you gain incremental acid-damage effects
+- Restrictive Vines: AoE spell that slows enemies as well as stopping their ability to jump
+---- effect is limited to a region of the ground (i.e. enemies can avoid the negative effects if they jump over the effected area without touching the ground)
+- Poison: apply a poison DOT effect to a single target
+
+
+Warlock basic abilities (shared):
+- Parasite: throw a parasite onto an enemy, if the enemy dies while the parasite is still on them, heal 10% of your health
+---- parasite stays attached to the player for 30s
+- Corrupted Beam: a slow moving beam of corruption that does damage to enemies while they're inside the effected area

@@ -1,0 +1,34 @@
+2 specialisations / talent trees: Frost Mage & Electric Mage
+
+Frost Mage overview:
+- lots of area control
+- slow enemies with frost/ice spells
+- try to avoid direct contact with enemies -- keep them at a distance as much as possible
+- able to focus on & control multiple enemies at once
+
+Electric Mage overview:
+- high burst damage with electric spells
+- can chain lightning to hit multiple enemies
+- able to stun enemies with electric shocks
+- try to avoid direct contact with enemies -- keep them at a distance as much as possible
+- mainly focus on single target damage, but a few ways to hit multiple enemeies at once
+
+
+Frost Mage basic abilities:
+- Frost Bolt: A ranged spell that deals frost damage and slows the target.
+- Frost Breath: area of effect spell that does not much damage but slows all enemies in the effected area.
+- Icy Veins: reduce damage taken
+- As Light As Snow: place down a small platform that only Frost Mages can walk on (disappears after 5s after walked on)
+
+
+
+Electric Mage basic abilities:
+- Lightning Bolt: A ranged spell that deals electric damage to a single target.
+- Chain Lightning: A spell that jumps between multiple enemies, dealing electric damage to each (reducing in damage with each jump).
+- Small Storm: summons a dark cloud in an area that sporadically sends bolts of lightning down from the cloud (hits visible and non-visible enemies alike)
+- Tazer: zap an adjacent enemy, stunning them for 2s
+
+
+Mage basic abilities (shared):
+- Fireball: shoot a small fireball that does small damage when it first hits, then more small damage over time
+- Teleport: teleport forward a moderate distance

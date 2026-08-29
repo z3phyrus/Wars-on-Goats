@@ -1,0 +1,25 @@
+Game with various competetive PVP mini-games for options to play
+- 2-team based gameplay
+- 2D side-on view 
+- like a platformer with abilities, strategy, team-play, out-of-game planning
+- Players can: run, jump, climb, and use various abilities based on their class
+- players have health that slowly regenerates over time 
+- Players can choose from different classes before each game
+- each class has 2 different talent trees that players can make choices about, each with unique abilities (and therefore playstyles)
+- the classes (overview/generalisation):
+  - Mage: bursts of high damage, some area control, low health/defence, low mobility
+  - Rogue: lots of quick attacks, can stealth, low health/defence, high mobility
+  - Hunter: ranged weapons, high mobility, and can set traps, pet companion, high visibility, moderate health/defence
+  - Warlock: can summon minions, attacks that damage over time, moderate health/defence, low mobility
+- game-maps are quite big, so that you can't see everything happening on one screen
+- players are only visible to each other when within their field of view (which is less than the amount of the map visible at a single moment)
+
+mini-games:
+- Capture The Flag:
+- - Each team has a base with a flag
+- - Objective: Capture the opposing team's flag and return it to your base while defending your own flag (3 times to win)
+- Control Bases:
+- - Several bases spread throughout a map
+- - Have your team control the bases to gain points
+- - There aren't specific bases which belong to teams, all bases are "up for grabs" by either team
+- - Winning team is the one who gets to 1000 points first

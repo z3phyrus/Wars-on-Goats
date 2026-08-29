@@ -1,0 +1,34 @@
+2 specialisations / talent trees: Beast Hunter & Survival Hunter
+
+
+Beast Hunter overview:
+- pet companion
+- focus on using your pet as health and damage
+- own attacks are almost entirely ranged 
+- good at control/manipulation over a single enemy
+- relies on keeping distance from the enemy as much as possible 
+
+
+Survival Hunter overview:
+- high visibility (larger field of view)
+- mix of ranged attacks and melee attacks
+- often utilises traps
+- most comfortable fighting at a distance, but able to hold their own up-close
+
+Beast Hunter basic abilities:
+- Pet Charge: cause your pet to continually run towards the nearest enemy while attacking them
+- Pet Heal: heal your pet, and temporarily boost defence
+- Force Shot: shoot at a distance and push the enemy backwards and slow them slightly
+- Throw: throw one adjacent target away from you (enemies and allies can be thrown)
+
+Survival Hunter basic abilities:
+- Damage Trap: place a damaging trap that is only visible when very close
+- Tracking Shot: a shot that curves towards the first enemy it sees (curve not so good that it always hits, but slightly-off aim should hit, and enemy running straight away will be bad)
+- Axe Swipe: swipe your axe causing moderately high melee damage
+- Wide Eyed: increase field of view for 30s
+
+
+
+Hunter basic abilities (shared):
+- Throw Mud: throw mud in the eyes of a nearby enemy reducing maximum field-of-view for 10s (and does a small amount of damage)
+- Long Shot: a shot that can fire a long distance quite accurately (precisely where the player aims, not necessarily at a target)
