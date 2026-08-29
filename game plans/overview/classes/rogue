@@ -4,7 +4,7 @@
 Stealth Rogue overview:
 - hide in the shadows, waiting to strike at opportune moments
 - deal a few instances of high damage
-- avoid direct confrontation -- low health and defense, relies on evasion and cunning
+- avoid direct confrontation -- low health and defence, relies on evasion and cunning
 - damage is mostly single-target, but can crowd-control a bit
 
 Warrior Rogue overview:
@@ -16,7 +16,7 @@ Warrior Rogue overview:
 Stealth Rogue basic abilities:
 - Stealth: movement speed reduced, disappear from sight of enemies while stationary or walking (visibile when jumping or climbing)
 ---- Stealth is broken if you take damage or perform an attack (or if you choose to break it manually)
----- cannot enter/initialise Stealth when enemies are visible (within players field of view)
+---- cannot enter/initialise Stealth when enemies are visible (players within your field of view)
 - Backstab: (need to be in Stealth before using this ability) deal high damage to an enemy from behind, exit Stealth
 - Incapacitate: (need to be in Stealth before using this ability) enemy becomes incapaciated for 5s (they fall to the ground wherever they got hit, but can't move)
 - Rest Your Eyes: slowly reduce your field of view and heal 
