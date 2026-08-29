@@ -25,9 +25,10 @@ Survival Hunter basic abilities:
 - Damage Trap: place a damaging trap that is only visible when very close
 - Tracking Shot: a shot that curves towards the first enemy it sees (curve not so good that it always hits, but slightly-off aim should hit, and enemy running straight away will be bad)
 - Axe Swipe: swipe your axe causing moderately high melee damage
-- Throw Mud: throw mud in the eyes of a nearby enemy reducing maximum field-of-view for 10s (and does a small amount of damage)
+- Wide Eyed: increase field of view for 30s
+
 
 
 Hunter basic abilities (shared):
-- Wide Eyed: increase field of view for 30s
+- Throw Mud: throw mud in the eyes of a nearby enemy reducing maximum field-of-view for 10s (and does a small amount of damage)
 - Long Shot: a shot that can fire a long distance quite accurately (precisely where the player aims, not necessarily at a target)
