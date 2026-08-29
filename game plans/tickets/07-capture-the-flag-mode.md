@@ -15,6 +15,7 @@ Implement the first full mini-game loop: capture the opposing team’s flag and 
 - A flag can be picked up by an enemy player who is alive and in range.
 - A carried flag must be returned to the opposing base to score.
 - While a flag is stolen, defenders protect their own flag and attempt to intercept the enemy carrier.
+- Neither team can capture the enemy flag if the enemy are holding their flag. (i.e. your flag has to be at your base for you to capture the enemy flag)
 - Match ends after three captures or when a fixed round limit is reached.
 
 ## Deliverables
