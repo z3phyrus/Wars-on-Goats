@@ -19,6 +19,8 @@ RUST_LOG=info cargo run
 cargo run -p spacetime_module
 ```
 
+This package is intentionally defined as a binary crate so the documented command works directly from the module scaffold.
+
 If you are using the SpacetimeDB CLI directly, start the local module from the module directory with the project-specific command from your local installation, for example:
 ```bash
 spacetime login

@@ -134,11 +134,13 @@ impl ModuleState {
             .find(|match_record| match_record.id == request.match_id)
             .ok_or_else(|| format!("match {} not found", request.match_id))?;
 
+        let new_status = request.status.clone();
+
         match_record.blue_team_score = request.blue_team_score;
         match_record.red_team_score = request.red_team_score;
-        match_record.status = request.status;
+        match_record.status = new_status.clone();
 
-        if matches!(request.status, MatchStatus::Completed) {
+        if matches!(new_status, MatchStatus::Completed) {
             match_record.winner = Some(if request.blue_team_score >= request.red_team_score {
                 "blue".to_string()
             } else {
