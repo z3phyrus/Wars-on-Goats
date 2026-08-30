@@ -1,9 +1,18 @@
-use axum::{extract::ws::{Message, WebSocket, WebSocketUpgrade}, extract::Extension, routing::{get, post}, Json, Router};
-use futures_util::stream::StreamExt;
+use axum::{
+    Json, Router,
+    extract::Extension,
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    routing::{get, post},
+};
 use futures_util::SinkExt;
+use futures_util::stream::StreamExt;
 use std::sync::Arc;
 
-use crate::{db::SpaceTimeClient, game::{GameState, JoinRequest, JoinResponse}, types::ApiResponse};
+use crate::{
+    db::SpaceTimeClient,
+    game::{GameState, JoinRequest, JoinResponse},
+    types::ApiResponse,
+};
 
 pub type SharedState = Arc<AppState>;
 
@@ -22,7 +31,10 @@ pub fn create_router(state: SharedState) -> Router {
 }
 
 async fn root_handler() -> Json<ApiResponse<&'static str>> {
-    Json(ApiResponse { success: true, message: "Wars on Goats server is running." })
+    Json(ApiResponse {
+        success: true,
+        message: "Wars on Goats server is running.",
+    })
 }
 
 async fn join_handler(

@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::{Arc, Mutex}};
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Player {
@@ -36,7 +39,10 @@ impl GameState {
             name,
         };
 
-        self.players.lock().unwrap().insert(player.id.clone(), player.clone());
+        self.players
+            .lock()
+            .unwrap()
+            .insert(player.id.clone(), player.clone());
         player
     }
 }

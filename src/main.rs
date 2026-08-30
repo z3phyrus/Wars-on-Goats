@@ -6,7 +6,11 @@ mod types;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use crate::{app::{create_router, AppState}, db::SpaceTimeClient, game::GameState};
+use crate::{
+    app::{AppState, create_router},
+    db::SpaceTimeClient,
+    game::GameState,
+};
 
 #[tokio::main]
 async fn main() {
