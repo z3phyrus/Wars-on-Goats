@@ -19,6 +19,7 @@ pub type SharedState = Arc<AppState>;
 #[derive(Clone)]
 pub struct AppState {
     pub game_state: GameState,
+    #[allow(dead_code)]
     pub db_client: SpaceTimeClient,
 }
 
@@ -59,9 +60,7 @@ async fn ws_handler(
 
 async fn handle_socket(stream: WebSocket, _state: SharedState) {
     let (mut sender, mut receiver) = stream.split();
-    if let Some(Ok(message)) = receiver.next().await {
-        if let Message::Text(text) = message {
-            let _ = sender.send(Message::Text(format!("Echo: {}", text))).await;
-        }
+    if let Some(Ok(Message::Text(text))) = receiver.next().await {
+        let _ = sender.send(Message::Text(format!("Echo: {}", text))).await;
     }
 }

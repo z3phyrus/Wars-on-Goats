@@ -56,11 +56,27 @@ For a more verbose local run:
 RUST_LOG=info cargo run
 ```
 
+To run the same validation CI uses locally:
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
+cargo check --all-targets
+cargo test --all-targets
+```
+
 For the module and infrastructure scripts:
 ```bash
 pwsh ./scripts/run-local.ps1
 pwsh ./scripts/check.ps1
 ```
+
+### Pre-commit guard
+Use the repo hook so a commit is blocked if it would fail CI:
+```bash
+git config core.hooksPath .githooks
+chmod +x .githooks/pre-commit
+```
+The hook runs the same formatting, Clippy, check, and test commands as CI before allowing the commit.
 
 ## Project conventions
 - Keep route/transport code in `src/app.rs`.

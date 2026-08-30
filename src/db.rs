@@ -1,5 +1,6 @@
 #[derive(Clone)]
 pub struct SpaceTimeClient {
+    #[allow(dead_code)]
     pub base_url: String,
 }
 
@@ -10,6 +11,7 @@ impl SpaceTimeClient {
         }
     }
 
+    #[allow(dead_code)]
     pub async fn ping(&self) -> Result<(), ()> {
         // TODO: implement SpaceTime DB integration
         Ok(())
