@@ -35,9 +35,14 @@ This does not mean every piece of logic must be forced into SpacetimeDB immediat
 ## Local setup
 
 ### Prerequisites
-- Install the Rust toolchain from rustup.
+- Install the Rust toolchain from rustup. This repo is pinned to Rust 1.93.0.
 - On Windows, install the Microsoft C++ Build Tools or use the GNU target toolchain if you intentionally target that setup.
 - Install the SpacetimeDB CLI when you are ready to run the module locally.
+
+```bash
+rustup toolchain install 1.93.0
+rustup default 1.93.0
+```
 
 ### Standard commands
 ```bash

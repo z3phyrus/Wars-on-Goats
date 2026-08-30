@@ -1,9 +1,14 @@
 # Local development workflow
 
 ## Prerequisites
-- Install Rust via `rustup`.
+- Install Rust 1.93.0 or newer via `rustup`.
 - Install the SpacetimeDB CLI if you want to run the module runtime locally.
 - Ensure `cargo`, `rustfmt`, and `clippy` are available in your PATH.
+
+```bash
+rustup toolchain install 1.93.0
+rustup default 1.93.0
+```
 
 ## Common commands
 ```bash
