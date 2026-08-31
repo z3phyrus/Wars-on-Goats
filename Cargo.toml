@@ -1,3 +1,7 @@
+[workspace]
+members = ["spacetime-module"]
+resolver = "2"
+
 [package]
 name = "wars_on_goats"
 version = "0.1.0"

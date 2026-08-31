@@ -1,15 +1,25 @@
-use axum::{extract::ws::{Message, WebSocket, WebSocketUpgrade}, extract::Extension, routing::{get, post}, Json, Router};
-use futures_util::stream::StreamExt;
+use axum::{
+    Json, Router,
+    extract::Extension,
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    routing::{get, post},
+};
 use futures_util::SinkExt;
+use futures_util::stream::StreamExt;
 use std::sync::Arc;
 
-use crate::{db::SpaceTimeClient, game::{GameState, JoinRequest, JoinResponse}, types::ApiResponse};
+use crate::{
+    db::SpaceTimeClient,
+    game::{GameState, JoinRequest, JoinResponse},
+    types::ApiResponse,
+};
 
 pub type SharedState = Arc<AppState>;
 
 #[derive(Clone)]
 pub struct AppState {
     pub game_state: GameState,
+    #[allow(dead_code)]
     pub db_client: SpaceTimeClient,
 }
 
@@ -22,7 +32,10 @@ pub fn create_router(state: SharedState) -> Router {
 }
 
 async fn root_handler() -> Json<ApiResponse<&'static str>> {
-    Json(ApiResponse { success: true, message: "Wars on Goats server is running." })
+    Json(ApiResponse {
+        success: true,
+        message: "Wars on Goats server is running.",
+    })
 }
 
 async fn join_handler(
@@ -47,9 +60,7 @@ async fn ws_handler(
 
 async fn handle_socket(stream: WebSocket, _state: SharedState) {
     let (mut sender, mut receiver) = stream.split();
-    if let Some(Ok(message)) = receiver.next().await {
-        if let Message::Text(text) = message {
-            let _ = sender.send(Message::Text(format!("Echo: {}", text))).await;
-        }
+    if let Some(Ok(Message::Text(text))) = receiver.next().await {
+        let _ = sender.send(Message::Text(format!("Echo: {}", text))).await;
     }
 }
