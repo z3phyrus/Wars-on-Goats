@@ -44,6 +44,21 @@ pub enum AbilityTarget {
 }
 
 #[allow(dead_code)]
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum AreaAnchor {
+    Caster,
+    AimPoint,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum AbilityArea {
+    Circle { radius: f32, anchor: AreaAnchor },
+    Beam { width: f32, length: f32 },
+    Cone { range: f32, angle_degrees: f32 },
+}
+
+#[allow(dead_code)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AbilityDefinition {
     pub id: String,
@@ -53,6 +68,9 @@ pub struct AbilityDefinition {
     pub range: f32,
     pub cooldown_ms: u64,
     pub cast_time_ms: u64,
+    pub duration_ms: u64,
+    pub follows_caster: bool,
+    pub area: AbilityArea,
     pub effects: Vec<StatusEffect>,
     pub min_damage: f32,
     pub max_damage: f32,
@@ -60,10 +78,18 @@ pub struct AbilityDefinition {
 
 #[allow(dead_code)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AbilityCastRequest {
+    pub aim_position: Position,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CombatEvent {
     pub source_player: String,
     pub target_player: Option<String>,
+    pub affected_players: Vec<String>,
     pub target_zone: Option<String>,
+    pub aim_position: Position,
     pub damage: f32,
     pub healing: f32,
     pub status_effects: Vec<StatusEffect>,

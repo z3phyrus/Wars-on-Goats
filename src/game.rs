@@ -6,8 +6,9 @@ use std::{
 };
 
 use crate::types::{
-    AbilityDefinition, AbilityTarget, CombatEvent, GameMode, MatchState, PlayerReadyState,
-    Position, Status, StatusEffect, TalentBuild, TeamId, Velocity, VisibilityState, WorldMap,
+    AbilityArea, AbilityCastRequest, AbilityDefinition, AbilityTarget, AreaAnchor, CombatEvent,
+    GameMode, MatchState, PlayerReadyState, Position, Status, StatusEffect, TalentBuild, TeamId,
+    Velocity, VisibilityState, WorldMap,
 };
 
 // ============ Player ============
@@ -501,11 +502,11 @@ impl GameState {
     }
 
     #[allow(dead_code)]
-    pub fn try_cast_ability(
+    pub fn cast_ability(
         &self,
         attacker_id: &str,
-        target_id: &str,
         ability: &AbilityDefinition,
+        request: &AbilityCastRequest,
     ) -> Result<CombatEvent, String> {
         let attacker_snapshot = {
             let players = self.players.lock().unwrap();
@@ -514,24 +515,9 @@ impl GameState {
                 .cloned()
                 .ok_or_else(|| "attacker not found".to_string())?
         };
-        let target_snapshot = {
-            let players = self.players.lock().unwrap();
-            players
-                .get(target_id)
-                .cloned()
-                .ok_or_else(|| "target not found".to_string())?
-        };
 
         if !attacker_snapshot.alive {
             return Err("attacker is dead".to_string());
-        }
-        if !target_snapshot.alive {
-            return Err("target is already dead".to_string());
-        }
-
-        let distance = attacker_snapshot.distance_to(&target_snapshot);
-        if distance > ability.range {
-            return Err("target is out of range".to_string());
         }
 
         if attacker_snapshot
@@ -546,18 +532,6 @@ impl GameState {
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_millis() as u64;
-
-        let same_team = attacker_snapshot.team_id == target_snapshot.team_id;
-        let kind_matches = match ability.target {
-            AbilityTarget::Enemy => !same_team,
-            AbilityTarget::Ally => same_team,
-            AbilityTarget::SelfCast => true,
-            AbilityTarget::Any => true,
-        };
-
-        if !kind_matches {
-            return Err("ability target does not match".to_string());
-        }
 
         {
             let mut players = self.players.lock().unwrap();
@@ -575,22 +549,49 @@ impl GameState {
         }
 
         let damage = (ability.min_damage + ability.max_damage) / 2.0;
+        let mut affected_players = Vec::new();
         {
             let mut players = self.players.lock().unwrap();
-            let target = players
-                .get_mut(target_id)
-                .ok_or_else(|| "target not found".to_string())?;
-            let new_health = (target.health - damage).max(0.0);
-            target.health = new_health;
-            if target.health <= 0.0 {
-                target.alive = false;
+            let target_ids: Vec<String> = players
+                .iter()
+                .filter(|(player_id, player)| {
+                    (player_id.as_str() != attacker_id
+                        || matches!(&ability.target, AbilityTarget::SelfCast))
+                        && player.alive
+                        && target_matches(
+                            player_id,
+                            attacker_id,
+                            ability.target.clone(),
+                            attacker_snapshot.team_id,
+                            player.team_id,
+                        )
+                        && area_contains(
+                            &ability.area,
+                            &attacker_snapshot.position,
+                            &player.position,
+                            &request.aim_position,
+                        )
+                })
+                .map(|(player_id, _)| player_id.clone())
+                .collect();
+
+            for target_id in target_ids {
+                if let Some(target) = players.get_mut(&target_id) {
+                    target.health = (target.health - damage).max(0.0);
+                    if target.health <= 0.0 {
+                        target.alive = false;
+                    }
+                    affected_players.push(target_id);
+                }
             }
         }
 
         let event = CombatEvent {
             source_player: attacker_snapshot.id.clone(),
-            target_player: Some(target_snapshot.id.clone()),
+            target_player: affected_players.first().cloned(),
+            affected_players,
             target_zone: None,
+            aim_position: request.aim_position.clone(),
             damage,
             healing: 0.0,
             status_effects: ability.effects.clone(),
@@ -600,10 +601,81 @@ impl GameState {
     }
 }
 
+fn distance_between(a: &Position, b: &Position) -> f32 {
+    ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
+}
+
+fn target_matches(
+    target_id: &str,
+    attacker_id: &str,
+    target: AbilityTarget,
+    attacker_team: Option<TeamId>,
+    target_team: Option<TeamId>,
+) -> bool {
+    let same_team = attacker_team == target_team;
+    match target {
+        AbilityTarget::Enemy => !same_team,
+        AbilityTarget::Ally => same_team,
+        AbilityTarget::SelfCast => target_id == attacker_id,
+        AbilityTarget::Any => true,
+    }
+}
+
+fn area_contains(area: &AbilityArea, caster: &Position, target: &Position, aim: &Position) -> bool {
+    match area {
+        AbilityArea::Circle { radius, anchor } => {
+            let center = match anchor {
+                AreaAnchor::Caster => caster,
+                AreaAnchor::AimPoint => aim,
+            };
+            distance_between(center, target) <= *radius
+        }
+        AbilityArea::Beam { width, length } => {
+            let direction_x = aim.x - caster.x;
+            let direction_y = aim.y - caster.y;
+            let direction_length = (direction_x.powi(2) + direction_y.powi(2)).sqrt();
+            if direction_length == 0.0 {
+                return false;
+            }
+            let unit_x = direction_x / direction_length;
+            let unit_y = direction_y / direction_length;
+            let target_x = target.x - caster.x;
+            let target_y = target.y - caster.y;
+            let forward_distance = target_x * unit_x + target_y * unit_y;
+            let lateral_distance = (target_x * unit_y - target_y * unit_x).abs();
+            forward_distance >= 0.0
+                && forward_distance <= *length
+                && lateral_distance <= *width / 2.0
+        }
+        AbilityArea::Cone {
+            range,
+            angle_degrees,
+        } => {
+            let target_x = target.x - caster.x;
+            let target_y = target.y - caster.y;
+            let target_distance = (target_x.powi(2) + target_y.powi(2)).sqrt();
+            if target_distance == 0.0 || target_distance > *range {
+                return false;
+            }
+            let aim_x = aim.x - caster.x;
+            let aim_y = aim.y - caster.y;
+            let aim_distance = (aim_x.powi(2) + aim_y.powi(2)).sqrt();
+            if aim_distance == 0.0 {
+                return false;
+            }
+            let dot = (target_x * aim_x + target_y * aim_y) / (target_distance * aim_distance);
+            dot >= (*angle_degrees / 2.0).to_radians().cos()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{AbilityDefinition, AbilityKind, AbilityTarget, WorldMap};
+    use crate::types::{
+        AbilityArea, AbilityCastRequest, AbilityDefinition, AbilityKind, AbilityTarget, AreaAnchor,
+        WorldMap,
+    };
 
     #[test]
     fn world_map_tracks_bases_spawn_and_visibility() {
@@ -662,17 +734,81 @@ mod tests {
             range: 15.0,
             cooldown_ms: 2000,
             cast_time_ms: 0,
+            duration_ms: 0,
+            follows_caster: false,
+            area: AbilityArea::Circle {
+                radius: 5.0,
+                anchor: AreaAnchor::AimPoint,
+            },
             effects: vec![],
             min_damage: 10.0,
             max_damage: 18.0,
         };
 
-        let result = world.try_cast_ability(&attacker.id, &defender.id, &ability);
+        let result = world.cast_ability(
+            &attacker.id,
+            &ability,
+            &AbilityCastRequest {
+                aim_position: Position { x: 12.0, y: 10.0 },
+            },
+        );
         assert!(result.is_ok());
         assert!(world.get_player(&defender.id).unwrap().health < 100.0);
 
-        let second = world.try_cast_ability(&attacker.id, &defender.id, &ability);
+        let second = world.cast_ability(
+            &attacker.id,
+            &ability,
+            &AbilityCastRequest {
+                aim_position: Position { x: 12.0, y: 10.0 },
+            },
+        );
         assert!(second.is_err());
+    }
+
+    #[test]
+    fn ability_cast_can_succeed_without_hitting_a_target() {
+        let world = GameState::new();
+        let attacker = world.register_player("attacker".to_string());
+        let defender = world.register_player("defender".to_string());
+        world.get_player_mut(&attacker.id, |player| {
+            player.team_id = Some(TeamId::Team1);
+            player.position = Position { x: 10.0, y: 10.0 };
+        });
+        world.get_player_mut(&defender.id, |player| {
+            player.team_id = Some(TeamId::Team2);
+            player.position = Position { x: 50.0, y: 50.0 };
+        });
+
+        let ability = AbilityDefinition {
+            id: "beam".to_string(),
+            name: "Beam".to_string(),
+            kind: AbilityKind::AreaOfEffect,
+            target: AbilityTarget::Enemy,
+            range: 100.0,
+            cooldown_ms: 0,
+            cast_time_ms: 0,
+            duration_ms: 0,
+            follows_caster: false,
+            area: AbilityArea::Beam {
+                width: 4.0,
+                length: 30.0,
+            },
+            effects: vec![],
+            min_damage: 10.0,
+            max_damage: 10.0,
+        };
+
+        let event = world
+            .cast_ability(
+                &attacker.id,
+                &ability,
+                &AbilityCastRequest {
+                    aim_position: Position { x: 10.0, y: 40.0 },
+                },
+            )
+            .unwrap();
+        assert!(event.affected_players.is_empty());
+        assert!(world.get_player(&defender.id).unwrap().alive);
     }
 
     #[test]
