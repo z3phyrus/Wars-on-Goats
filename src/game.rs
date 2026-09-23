@@ -6,7 +6,9 @@ use std::{
 };
 
 use crate::types::{
-    GameMode, MatchState, PlayerReadyState, Position, Status, TalentBuild, TeamId, Velocity,
+    AbilityArea, AbilityCastRequest, AbilityDefinition, AbilityTarget, AreaAnchor, CombatEvent,
+    GameMode, MatchState, PlayerReadyState, Position, Status, StatusEffect, TalentBuild, TeamId,
+    Velocity, VisibilityState, WorldMap,
 };
 
 // ============ Player ============
@@ -22,6 +24,7 @@ pub struct Player {
     pub max_health: f32,
     pub alive: bool,
     pub statuses: Vec<Status>,
+    pub ability_cooldowns: HashMap<String, u64>,
     pub wins: u32,
     pub losses: u32,
     // #stretch-goal: rank field
@@ -40,9 +43,17 @@ impl Player {
             max_health: 100.0,
             alive: true,
             statuses: Vec::new(),
+            ability_cooldowns: HashMap::new(),
             wins: 0,
             losses: 0,
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn distance_to(&self, other: &Player) -> f32 {
+        ((self.position.x - other.position.x).powi(2)
+            + (self.position.y - other.position.y).powi(2))
+        .sqrt()
     }
 }
 
@@ -396,5 +407,439 @@ impl GameState {
                 }
             });
         }
+    }
+
+    #[allow(dead_code)]
+    pub fn get_world_map(&self) -> WorldMap {
+        WorldMap::default()
+    }
+
+    #[allow(dead_code)]
+    pub fn compute_visibility_for_player(
+        &self,
+        player_id: &str,
+        map: &WorldMap,
+    ) -> VisibilityState {
+        let Some(player) = self.get_player(player_id) else {
+            return VisibilityState::default();
+        };
+
+        let mut visible_players = Vec::new();
+        let mut hidden_players = Vec::new();
+        let mut visible_zones = Vec::new();
+
+        for (other_id, other) in self.players.lock().unwrap().iter() {
+            if other_id == player_id {
+                continue;
+            }
+            let dist = player.distance_to(other);
+            let is_visible =
+                dist <= 180.0 && !map.line_of_sight_blocked(&player.position, &other.position);
+            if is_visible {
+                visible_players.push(other_id.clone());
+            } else {
+                hidden_players.push(other_id.clone());
+            }
+        }
+
+        for zone in &map.zones {
+            let center = zone.center();
+            let dist = ((player.position.x - center.x).powi(2)
+                + (player.position.y - center.y).powi(2))
+            .sqrt();
+            if dist <= zone.visibility_range {
+                visible_zones.push(zone.id.clone());
+            }
+        }
+
+        VisibilityState {
+            visible_players,
+            hidden_players,
+            visible_zones,
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn apply_status_effect(
+        &self,
+        player_id: &str,
+        effect: StatusEffect,
+        duration_ms: u64,
+        intensity: f32,
+    ) {
+        let mut players = self.players.lock().unwrap();
+        if let Some(player) = players.get_mut(player_id) {
+            player.statuses.push(Status {
+                effect,
+                duration_ms,
+                intensity,
+            });
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn tick_status_effects(&self) {
+        let mut players = self.players.lock().unwrap();
+        for player in players.values_mut() {
+            let mut remaining = Vec::new();
+            for status in &player.statuses {
+                let updated_duration = status.duration_ms.saturating_sub(100);
+                if updated_duration > 0 {
+                    remaining.push(Status {
+                        effect: status.effect.clone(),
+                        duration_ms: updated_duration,
+                        intensity: status.intensity,
+                    });
+                } else if matches!(status.effect, StatusEffect::Burn | StatusEffect::Poison) {
+                    player.health = (player.health - status.intensity * 8.0).max(0.0);
+                    if player.health <= 0.0 {
+                        player.alive = false;
+                    }
+                }
+            }
+            player.statuses = remaining;
+        }
+    }
+
+    #[allow(dead_code)]
+    pub fn cast_ability(
+        &self,
+        attacker_id: &str,
+        ability: &AbilityDefinition,
+        request: &AbilityCastRequest,
+    ) -> Result<CombatEvent, String> {
+        let attacker_snapshot = {
+            let players = self.players.lock().unwrap();
+            players
+                .get(attacker_id)
+                .cloned()
+                .ok_or_else(|| "attacker not found".to_string())?
+        };
+
+        if !attacker_snapshot.alive {
+            return Err("attacker is dead".to_string());
+        }
+
+        if attacker_snapshot
+            .statuses
+            .iter()
+            .any(|status| matches!(status.effect, StatusEffect::Silence) && status.duration_ms > 0)
+        {
+            return Err("attacker is silenced".to_string());
+        }
+
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+
+        {
+            let mut players = self.players.lock().unwrap();
+            let attacker = players
+                .get_mut(attacker_id)
+                .ok_or_else(|| "attacker not found".to_string())?;
+            if let Some(cooldown_until) = attacker.ability_cooldowns.get(&ability.id)
+                && *cooldown_until > now_ms
+            {
+                return Err("ability is on cooldown".to_string());
+            }
+            attacker
+                .ability_cooldowns
+                .insert(ability.id.clone(), now_ms + ability.cooldown_ms);
+        }
+
+        let damage = (ability.min_damage + ability.max_damage) / 2.0;
+        let mut affected_players = Vec::new();
+        {
+            let mut players = self.players.lock().unwrap();
+            let target_ids: Vec<String> = players
+                .iter()
+                .filter(|(player_id, player)| {
+                    (player_id.as_str() != attacker_id
+                        || matches!(&ability.target, AbilityTarget::SelfCast))
+                        && player.alive
+                        && target_matches(
+                            player_id,
+                            attacker_id,
+                            ability.target.clone(),
+                            attacker_snapshot.team_id,
+                            player.team_id,
+                        )
+                        && area_contains(
+                            &ability.area,
+                            &attacker_snapshot.position,
+                            &player.position,
+                            &request.aim_position,
+                        )
+                })
+                .map(|(player_id, _)| player_id.clone())
+                .collect();
+
+            for target_id in target_ids {
+                if let Some(target) = players.get_mut(&target_id) {
+                    target.health = (target.health - damage).max(0.0);
+                    if target.health <= 0.0 {
+                        target.alive = false;
+                    }
+                    affected_players.push(target_id);
+                }
+            }
+        }
+
+        let event = CombatEvent {
+            source_player: attacker_snapshot.id.clone(),
+            target_player: affected_players.first().cloned(),
+            affected_players,
+            target_zone: None,
+            aim_position: request.aim_position.clone(),
+            damage,
+            healing: 0.0,
+            status_effects: ability.effects.clone(),
+        };
+
+        Ok(event)
+    }
+}
+
+fn distance_between(a: &Position, b: &Position) -> f32 {
+    ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt()
+}
+
+fn target_matches(
+    target_id: &str,
+    attacker_id: &str,
+    target: AbilityTarget,
+    attacker_team: Option<TeamId>,
+    target_team: Option<TeamId>,
+) -> bool {
+    let same_team = attacker_team == target_team;
+    match target {
+        AbilityTarget::Enemy => !same_team,
+        AbilityTarget::Ally => same_team,
+        AbilityTarget::SelfCast => target_id == attacker_id,
+        AbilityTarget::Any => true,
+    }
+}
+
+fn area_contains(area: &AbilityArea, caster: &Position, target: &Position, aim: &Position) -> bool {
+    match area {
+        AbilityArea::Circle { radius, anchor } => {
+            let center = match anchor {
+                AreaAnchor::Caster => caster,
+                AreaAnchor::AimPoint => aim,
+            };
+            distance_between(center, target) <= *radius
+        }
+        AbilityArea::Beam { width, length } => {
+            let direction_x = aim.x - caster.x;
+            let direction_y = aim.y - caster.y;
+            let direction_length = (direction_x.powi(2) + direction_y.powi(2)).sqrt();
+            if direction_length == 0.0 {
+                return false;
+            }
+            let unit_x = direction_x / direction_length;
+            let unit_y = direction_y / direction_length;
+            let target_x = target.x - caster.x;
+            let target_y = target.y - caster.y;
+            let forward_distance = target_x * unit_x + target_y * unit_y;
+            let lateral_distance = (target_x * unit_y - target_y * unit_x).abs();
+            forward_distance >= 0.0
+                && forward_distance <= *length
+                && lateral_distance <= *width / 2.0
+        }
+        AbilityArea::Cone {
+            range,
+            angle_degrees,
+        } => {
+            let target_x = target.x - caster.x;
+            let target_y = target.y - caster.y;
+            let target_distance = (target_x.powi(2) + target_y.powi(2)).sqrt();
+            if target_distance == 0.0 || target_distance > *range {
+                return false;
+            }
+            let aim_x = aim.x - caster.x;
+            let aim_y = aim.y - caster.y;
+            let aim_distance = (aim_x.powi(2) + aim_y.powi(2)).sqrt();
+            if aim_distance == 0.0 {
+                return false;
+            }
+            let dot = (target_x * aim_x + target_y * aim_y) / (target_distance * aim_distance);
+            dot >= (*angle_degrees / 2.0).to_radians().cos()
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::types::{
+        AbilityArea, AbilityCastRequest, AbilityDefinition, AbilityKind, AbilityTarget, AreaAnchor,
+        WorldMap,
+    };
+
+    #[test]
+    fn world_map_tracks_bases_spawn_and_visibility() {
+        let map = WorldMap::default();
+        assert!(map.width > 0.0);
+        assert!(map.height > 0.0);
+        assert_eq!(map.spawn_points.len(), 2);
+
+        let mut blue = map.spawn_points.get(&TeamId::Team1).unwrap().clone();
+        blue.x += 12.0;
+        assert!(blue.x > map.spawn_points.get(&TeamId::Team1).unwrap().x);
+
+        let world = GameState::new();
+        let p1 = world.register_player("alice".to_string());
+        let p2 = world.register_player("bob".to_string());
+        world.get_player_mut(&p1.id, |player| {
+            player.team_id = Some(TeamId::Team1);
+            player.position = Position { x: 10.0, y: 20.0 };
+        });
+        world.get_player_mut(&p2.id, |player| {
+            player.team_id = Some(TeamId::Team2);
+            player.position = Position { x: 15.0, y: 20.0 };
+        });
+
+        let visibility = world.compute_visibility_for_player(&p1.id, &map);
+        assert!(visibility.visible_players.contains(&p2.id));
+        assert!(!visibility.visible_zones.is_empty());
+    }
+
+    #[test]
+    fn combat_ability_checks_range_cooldown_and_state() {
+        let world = GameState::new();
+        let attacker = world.register_player("attacker".to_string());
+        let defender = world.register_player("defender".to_string());
+
+        world.get_player_mut(&attacker.id, |player| {
+            player.team_id = Some(TeamId::Team1);
+            player.position = Position { x: 10.0, y: 10.0 };
+            player.alive = true;
+            player.health = 100.0;
+            player.max_health = 100.0;
+        });
+        world.get_player_mut(&defender.id, |player| {
+            player.team_id = Some(TeamId::Team2);
+            player.position = Position { x: 12.0, y: 10.0 };
+            player.alive = true;
+            player.health = 100.0;
+            player.max_health = 100.0;
+        });
+
+        let ability = AbilityDefinition {
+            id: "basic-shot".to_string(),
+            name: "Basic Shot".to_string(),
+            kind: AbilityKind::SingleTarget,
+            target: AbilityTarget::Enemy,
+            range: 15.0,
+            cooldown_ms: 2000,
+            cast_time_ms: 0,
+            duration_ms: 0,
+            follows_caster: false,
+            area: AbilityArea::Circle {
+                radius: 5.0,
+                anchor: AreaAnchor::AimPoint,
+            },
+            effects: vec![],
+            min_damage: 10.0,
+            max_damage: 18.0,
+        };
+
+        let result = world.cast_ability(
+            &attacker.id,
+            &ability,
+            &AbilityCastRequest {
+                aim_position: Position { x: 12.0, y: 10.0 },
+            },
+        );
+        assert!(result.is_ok());
+        assert!(world.get_player(&defender.id).unwrap().health < 100.0);
+
+        let second = world.cast_ability(
+            &attacker.id,
+            &ability,
+            &AbilityCastRequest {
+                aim_position: Position { x: 12.0, y: 10.0 },
+            },
+        );
+        assert!(second.is_err());
+    }
+
+    #[test]
+    fn ability_cast_can_succeed_without_hitting_a_target() {
+        let world = GameState::new();
+        let attacker = world.register_player("attacker".to_string());
+        let defender = world.register_player("defender".to_string());
+        world.get_player_mut(&attacker.id, |player| {
+            player.team_id = Some(TeamId::Team1);
+            player.position = Position { x: 10.0, y: 10.0 };
+        });
+        world.get_player_mut(&defender.id, |player| {
+            player.team_id = Some(TeamId::Team2);
+            player.position = Position { x: 50.0, y: 50.0 };
+        });
+
+        let ability = AbilityDefinition {
+            id: "beam".to_string(),
+            name: "Beam".to_string(),
+            kind: AbilityKind::AreaOfEffect,
+            target: AbilityTarget::Enemy,
+            range: 100.0,
+            cooldown_ms: 0,
+            cast_time_ms: 0,
+            duration_ms: 0,
+            follows_caster: false,
+            area: AbilityArea::Beam {
+                width: 4.0,
+                length: 30.0,
+            },
+            effects: vec![],
+            min_damage: 10.0,
+            max_damage: 10.0,
+        };
+
+        let event = world
+            .cast_ability(
+                &attacker.id,
+                &ability,
+                &AbilityCastRequest {
+                    aim_position: Position { x: 10.0, y: 40.0 },
+                },
+            )
+            .unwrap();
+        assert!(event.affected_players.is_empty());
+        assert!(world.get_player(&defender.id).unwrap().alive);
+    }
+
+    #[test]
+    fn status_effects_expire_and_damage_can_ko_players() {
+        let world = GameState::new();
+        let source = world.register_player("source".to_string());
+        let target = world.register_player("target".to_string());
+
+        world.get_player_mut(&source.id, |player| {
+            player.team_id = Some(TeamId::Team1);
+            player.position = Position { x: 0.0, y: 0.0 };
+        });
+        world.get_player_mut(&target.id, |player| {
+            player.team_id = Some(TeamId::Team2);
+            player.position = Position { x: 5.0, y: 0.0 };
+            player.health = 15.0;
+            player.max_health = 100.0;
+            player.alive = true;
+        });
+
+        world.apply_status_effect(&target.id, crate::types::StatusEffect::Burn, 10, 1.0);
+        world.apply_status_effect(&target.id, crate::types::StatusEffect::Slow, 20, 0.5);
+        let before = world.get_player(&target.id).unwrap().health;
+        world.tick_status_effects();
+        let after = world.get_player(&target.id).unwrap().health;
+        assert!(after <= before || !world.get_player(&target.id).unwrap().alive);
+
+        world.get_player_mut(&target.id, |player| {
+            player.health = 0.0;
+            player.alive = false;
+        });
+        assert!(!world.get_player(&target.id).unwrap().alive);
     }
 }
