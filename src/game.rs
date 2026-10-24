@@ -6,9 +6,9 @@ use std::{
 };
 
 use crate::types::{
-    AbilityArea, AbilityCastRequest, AbilityDefinition, AbilityTarget, AreaAnchor, CombatEvent,
-    GameMode, MatchState, PlayerReadyState, Position, Status, StatusEffect, TalentBuild, TeamId,
-    Velocity, VisibilityState, WorldMap,
+    AbilityArea, AbilityCastRequest, AbilityDefinition, AbilityKind, AbilityTarget, AreaAnchor,
+    CombatEvent, GameMode, MatchState, PlayerReadyState, Position, Status, StatusEffect,
+    TalentBuild, TeamId, Velocity, VisibilityState, WorldMap,
 };
 
 // ============ Player ============
@@ -27,6 +27,7 @@ pub struct Player {
     pub ability_cooldowns: HashMap<String, u64>,
     pub wins: u32,
     pub losses: u32,
+    pub on_ground: bool,
     // #stretch-goal: rank field
 }
 
@@ -46,6 +47,7 @@ impl Player {
             ability_cooldowns: HashMap::new(),
             wins: 0,
             losses: 0,
+            on_ground: true,
         }
     }
 
@@ -153,6 +155,15 @@ impl GameRoom {
                     .unwrap_or(false)
             })
     }
+}
+
+// ============ Local solo session ============
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LocalSoloSession {
+    pub session_id: String,
+    pub player_id: String,
+    pub training_target_ids: Vec<String>,
+    pub started_at_ms: u64,
 }
 
 // ============ MatchmakingEntry ============
@@ -415,6 +426,247 @@ impl GameState {
     }
 
     #[allow(dead_code)]
+    pub fn start_local_solo_session(&self, name: &str) -> Player {
+        let player = self.register_player(name.to_string());
+        let session_id = uuid::Uuid::new_v4().to_string();
+
+        {
+            let mut players = self.players.lock().unwrap();
+            if let Some(player_state) = players.get_mut(&player.id) {
+                player_state.team_id = Some(TeamId::Team1);
+                player_state.position = Position { x: 120.0, y: 154.0 };
+                player_state.velocity = Velocity { dx: 0.0, dy: 0.0 };
+                player_state.health = 100.0;
+                player_state.max_health = 100.0;
+                player_state.alive = true;
+                player_state.on_ground = true;
+                player_state.ability_cooldowns.clear();
+            }
+        }
+
+        let mut target_ids = Vec::new();
+        for idx in 0..3 {
+            let target_id = format!("training-target-{session_id}-{idx}");
+            let target_name = format!("training-target-{idx}");
+            {
+                let mut players = self.players.lock().unwrap();
+                players.insert(
+                    target_id.clone(),
+                    Player {
+                        id: target_id.clone(),
+                        name: target_name.clone(),
+                        team_id: Some(TeamId::Team2),
+                        talent_build: None,
+                        position: Position {
+                            x: 260.0 + idx as f32 * 140.0,
+                            y: 154.0,
+                        },
+                        velocity: Velocity { dx: 0.0, dy: 0.0 },
+                        health: 100.0,
+                        max_health: 100.0,
+                        alive: true,
+                        statuses: Vec::new(),
+                        ability_cooldowns: HashMap::new(),
+                        wins: 0,
+                        losses: 0,
+                        on_ground: true,
+                    },
+                );
+            }
+            target_ids.push(target_id);
+        }
+
+        let _session = LocalSoloSession {
+            session_id,
+            player_id: player.id.clone(),
+            training_target_ids: target_ids.clone(),
+            started_at_ms: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+        };
+
+        self.get_player(&player.id).unwrap_or(player)
+    }
+
+    #[allow(dead_code)]
+    pub fn reset_local_session(&self, player_id: &str) -> Option<Player> {
+        self.get_player(player_id)?;
+
+        let mut players = self.players.lock().unwrap();
+        let mut idx = 0usize;
+        for (_, other) in players.iter_mut() {
+            if other.name.starts_with("training-target-") {
+                other.health = 100.0;
+                other.max_health = 100.0;
+                other.alive = true;
+                other.position = Position {
+                    x: 260.0 + idx as f32 * 140.0,
+                    y: 154.0,
+                };
+                idx += 1;
+            }
+        }
+
+        if let Some(player_state) = players.get_mut(player_id) {
+            player_state.position = Position { x: 120.0, y: 154.0 };
+            player_state.velocity = Velocity { dx: 0.0, dy: 0.0 };
+            player_state.health = 100.0;
+            player_state.max_health = 100.0;
+            player_state.alive = true;
+            player_state.on_ground = true;
+            player_state.ability_cooldowns.clear();
+        }
+
+        players.get(player_id).cloned()
+    }
+
+    #[allow(dead_code)]
+    pub fn training_targets_for_player(&self, _player_id: &str) -> Vec<Player> {
+        let players = self.players.lock().unwrap();
+        players
+            .values()
+            .filter(|player| player.name.starts_with("training-target-"))
+            .cloned()
+            .collect()
+    }
+
+    #[allow(dead_code)]
+    pub fn snapshot_for_player(&self, player_id: &str) -> serde_json::Value {
+        let players = self.players.lock().unwrap();
+        let mut entries = Vec::new();
+        for (id, player) in players.iter() {
+            entries.push(serde_json::json!({
+                "id": id,
+                "name": player.name,
+                "team_id": match player.team_id { Some(TeamId::Team1) => "Team1", Some(TeamId::Team2) => "Team2", None => "None" },
+                "position": { "x": player.position.x, "y": player.position.y },
+                "health": player.health,
+                "max_health": player.max_health,
+                "alive": player.alive,
+                "statuses": player.statuses.iter().map(|status| serde_json::json!({
+                    "effect": format!("{:?}", status.effect),
+                    "duration_ms": status.duration_ms,
+                    "intensity": status.intensity
+                })).collect::<Vec<_>>()
+            }));
+        }
+        serde_json::json!({
+            "type": "snapshot",
+            "player_id": player_id,
+            "players": entries,
+            "time": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis()
+        })
+    }
+
+    #[allow(dead_code)]
+    pub fn set_player_input(
+        &self,
+        player_id: &str,
+        move_x: f32,
+        jump: bool,
+        aim: Position,
+        ability_id: Option<String>,
+    ) -> Option<CombatEvent> {
+        let mut player_snapshot = {
+            let players = self.players.lock().unwrap();
+            players.get(player_id).cloned()?
+        };
+
+        if !player_snapshot.alive {
+            return None;
+        }
+
+        let next_x = (player_snapshot.position.x + move_x * 8.0).clamp(32.0, 990.0);
+        let next_y = if jump && player_snapshot.on_ground {
+            player_snapshot.velocity.dy = -15.0;
+            player_snapshot.on_ground = false;
+            player_snapshot.position.y - 18.0
+        } else {
+            player_snapshot.position.y
+        };
+
+        {
+            let mut players = self.players.lock().unwrap();
+            if let Some(player_state) = players.get_mut(player_id) {
+                player_state.position.x = next_x;
+                player_state.position.y = next_y;
+                player_state.velocity.dx = move_x * 8.0;
+                if !player_state.on_ground {
+                    player_state.velocity.dy += 1.4;
+                    player_state.position.y += player_state.velocity.dy;
+                    if player_state.position.y >= 120.0 {
+                        player_state.position.y = 120.0;
+                        player_state.velocity.dy = 0.0;
+                        player_state.on_ground = true;
+                    }
+                }
+            }
+        }
+
+        if let Some(ability_name) = ability_id {
+            let ability = default_training_ability();
+            if ability_name == ability.id {
+                return self
+                    .cast_ability(
+                        player_id,
+                        &ability,
+                        &AbilityCastRequest { aim_position: aim },
+                    )
+                    .ok();
+            }
+        }
+
+        None
+    }
+
+    #[allow(dead_code)]
+    pub fn advance_local_world(&self, delta_ms: u64) {
+        let mut players = self.players.lock().unwrap();
+        let player_id = players.iter().find_map(|(id, player)| {
+            if !player.name.starts_with("training-target-") {
+                Some(id.clone())
+            } else {
+                None
+            }
+        });
+
+        let Some(player_id) = player_id else {
+            return;
+        };
+
+        let hero_position = players
+            .get(&player_id)
+            .map(|player| player.position.clone());
+
+        for player in players.values_mut() {
+            if player.name.starts_with("training-target-") {
+                if let Some(hero_position) = &hero_position {
+                    let target_x = hero_position.x;
+                    if (player.position.x - target_x).abs() > 24.0 {
+                        let direction = if player.position.x < target_x {
+                            1.0
+                        } else {
+                            -1.0
+                        };
+                        player.position.x += direction * 0.4 * (delta_ms as f32 / 16.0);
+                    }
+                    player.position.y = 120.0;
+                    player.on_ground = true;
+                }
+            } else if !player.on_ground {
+                player.velocity.dy += 1.4;
+                player.position.y += player.velocity.dy;
+                if player.position.y >= 120.0 {
+                    player.position.y = 120.0;
+                    player.velocity.dy = 0.0;
+                    player.on_ground = true;
+                }
+            }
+        }
+    }
+
+    #[allow(dead_code)]
     pub fn compute_visibility_for_player(
         &self,
         player_id: &str,
@@ -528,6 +780,11 @@ impl GameState {
             return Err("attacker is silenced".to_string());
         }
 
+        let aim_distance = distance_between(&attacker_snapshot.position, &request.aim_position);
+        if aim_distance > ability.range {
+            return Err("target is out of range".to_string());
+        }
+
         let now_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -598,6 +855,27 @@ impl GameState {
         };
 
         Ok(event)
+    }
+}
+
+fn default_training_ability() -> AbilityDefinition {
+    AbilityDefinition {
+        id: "arc-blast".to_string(),
+        name: "Arc Blast".to_string(),
+        kind: AbilityKind::AreaOfEffect,
+        target: AbilityTarget::Enemy,
+        range: 420.0,
+        cooldown_ms: 500,
+        cast_time_ms: 0,
+        duration_ms: 0,
+        follows_caster: false,
+        area: AbilityArea::Circle {
+            radius: 90.0,
+            anchor: AreaAnchor::AimPoint,
+        },
+        effects: vec![StatusEffect::Slow],
+        min_damage: 12.0,
+        max_damage: 22.0,
     }
 }
 
@@ -841,5 +1119,75 @@ mod tests {
             player.alive = false;
         });
         assert!(!world.get_player(&target.id).unwrap().alive);
+    }
+
+    #[test]
+    fn solo_session_supports_input_movement_and_training_target_damage() {
+        let world = GameState::new();
+        let player = world.start_local_solo_session("hero");
+
+        world.set_player_input(
+            &player.id,
+            1.0,
+            true,
+            Position { x: 260.0, y: 120.0 },
+            Some("arc-blast".to_string()),
+        );
+        world.advance_local_world(16);
+
+        assert!(player.position.x != 0.0 || player.position.y != 0.0);
+        assert!(world.get_player(&player.id).unwrap().position.x >= 0.0);
+
+        let enemies = world.training_targets_for_player(&player.id);
+        assert!(!enemies.is_empty());
+
+        let target_id = enemies[0].id.clone();
+        world.get_player_mut(&target_id, |target| {
+            target.position = Position { x: 180.0, y: 160.0 };
+            target.health = 100.0;
+            target.alive = true;
+        });
+
+        world.get_player_mut(&player.id, |p| {
+            p.ability_cooldowns.clear();
+        });
+
+        let mut ability = default_training_ability();
+        ability.cooldown_ms = 0;
+        let outcome = world.cast_ability(
+            &player.id,
+            &ability,
+            &AbilityCastRequest {
+                aim_position: Position { x: 180.0, y: 160.0 },
+            },
+        );
+
+        assert!(outcome.is_ok());
+        assert!(
+            world.get_player(&target_id).unwrap().health < 100.0
+                || !world.get_player(&target_id).unwrap().alive
+        );
+    }
+
+    #[test]
+    fn solo_reset_returns_the_restored_player_state() {
+        let world = GameState::new();
+        let player = world.start_local_solo_session("hero");
+        world.get_player_mut(&player.id, |state| {
+            state.position = Position { x: 900.0, y: 80.0 };
+            state.health = 0.0;
+            state.alive = false;
+            state
+                .ability_cooldowns
+                .insert("arc-blast".to_string(), u64::MAX);
+        });
+
+        let reset = world.reset_local_session(&player.id).unwrap();
+
+        assert_eq!(reset.position.x, 120.0);
+        assert_eq!(reset.position.y, 154.0);
+        assert_eq!(reset.health, 100.0);
+        assert!(reset.alive);
+        assert!(reset.ability_cooldowns.is_empty());
     }
 }

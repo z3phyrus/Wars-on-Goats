@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct ApiResponse<T> {
     pub success: bool,
@@ -80,6 +81,15 @@ pub struct AbilityDefinition {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AbilityCastRequest {
     pub aim_position: Position,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GameplayInput {
+    pub move_x: f32,
+    pub jump: bool,
+    pub aim_position: Position,
+    pub ability_id: Option<String>,
 }
 
 #[allow(dead_code)]
