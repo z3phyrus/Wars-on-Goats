@@ -1,5 +1,4 @@
-One time when playing the attack got stuck, so i wasn't able to cast the attack again (it happened after i killed the middle training dummy)
--- but i replayed the game and it didn't happen the second time, so not a consistent bug
+
 
 
 

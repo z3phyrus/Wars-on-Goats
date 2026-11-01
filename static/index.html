@@ -196,8 +196,8 @@
         const castAim = { x: state.aim.x, y: state.aim.y };
         const payload = {
           player_id: state.playerId,
-          move_x: (state.keys.right ? 1 : 0) - (state.keys.left ? 1 : 0),
-          jump: state.keys.jump,
+          player_x: state.player.position.x,
+          player_y: state.player.position.y,
           aim_x: castAim.x,
           aim_y: castAim.y,
           ability_id: abilityId,

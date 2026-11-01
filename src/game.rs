@@ -563,45 +563,17 @@ impl GameState {
     pub fn set_player_input(
         &self,
         player_id: &str,
-        move_x: f32,
-        jump: bool,
+        player_position: Position,
         aim: Position,
         ability_id: Option<String>,
     ) -> Option<CombatEvent> {
-        let mut player_snapshot = {
-            let players = self.players.lock().unwrap();
-            players.get(player_id).cloned()?
-        };
-
-        if !player_snapshot.alive {
-            return None;
-        }
-
-        let next_x = (player_snapshot.position.x + move_x * 8.0).clamp(32.0, 990.0);
-        let next_y = if jump && player_snapshot.on_ground {
-            player_snapshot.velocity.dy = -15.0;
-            player_snapshot.on_ground = false;
-            player_snapshot.position.y - 18.0
-        } else {
-            player_snapshot.position.y
-        };
-
         {
             let mut players = self.players.lock().unwrap();
-            if let Some(player_state) = players.get_mut(player_id) {
-                player_state.position.x = next_x;
-                player_state.position.y = next_y;
-                player_state.velocity.dx = move_x * 8.0;
-                if !player_state.on_ground {
-                    player_state.velocity.dy += 1.4;
-                    player_state.position.y += player_state.velocity.dy;
-                    if player_state.position.y >= 120.0 {
-                        player_state.position.y = 120.0;
-                        player_state.velocity.dy = 0.0;
-                        player_state.on_ground = true;
-                    }
-                }
+            let player_state = players.get_mut(player_id)?;
+            if !player_state.alive {
+                return None;
             }
+            player_state.position = player_position;
         }
 
         if let Some(ability_name) = ability_id {
@@ -1128,8 +1100,7 @@ mod tests {
 
         world.set_player_input(
             &player.id,
-            1.0,
-            true,
+            Position { x: 128.0, y: 154.0 },
             Position { x: 260.0, y: 120.0 },
             Some("arc-blast".to_string()),
         );
@@ -1189,5 +1160,39 @@ mod tests {
         assert_eq!(reset.health, 100.0);
         assert!(reset.alive);
         assert!(reset.ability_cooldowns.is_empty());
+    }
+
+    #[test]
+    fn solo_training_spell_uses_current_player_position_for_range() {
+        let world = GameState::new();
+        let player = world.start_local_solo_session("hero");
+        let target = world.training_targets_for_player(&player.id)[2].clone();
+        world.get_player_mut(&target.id, |target| {
+            target.position = Position { x: 850.0, y: 154.0 };
+        });
+
+        let event = world
+            .set_player_input(
+                &player.id,
+                Position { x: 760.0, y: 154.0 },
+                Position { x: 850.0, y: 154.0 },
+                Some("arc-blast".to_string()),
+            )
+            .expect("cast should use the current player position");
+
+        assert!(event.affected_players.contains(&target.id));
+        assert!(world.get_player(&target.id).unwrap().health < 100.0);
+        assert_eq!(world.get_player(&player.id).unwrap().position.x, 760.0);
+
+        world.get_player_mut(&player.id, |player| {
+            player.ability_cooldowns.clear();
+        });
+        let out_of_range = world.set_player_input(
+            &player.id,
+            Position { x: 760.0, y: 154.0 },
+            Position { x: 120.0, y: 154.0 },
+            Some("arc-blast".to_string()),
+        );
+        assert!(out_of_range.is_none());
     }
 }

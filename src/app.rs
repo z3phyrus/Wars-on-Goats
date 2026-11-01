@@ -160,14 +160,14 @@ async fn solo_input_handler(
         .get("player_id")
         .and_then(|v| v.as_str())
         .unwrap_or_default();
-    let move_x = payload
-        .get("move_x")
+    let player_x = payload
+        .get("player_x")
         .and_then(|v| v.as_f64())
-        .unwrap_or(0.0) as f32;
-    let jump = payload
-        .get("jump")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+        .unwrap_or(120.0) as f32;
+    let player_y = payload
+        .get("player_y")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(154.0) as f32;
     let aim_x = payload.get("aim_x").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
     let aim_y = payload.get("aim_y").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
     let ability_id = payload
@@ -179,8 +179,10 @@ async fn solo_input_handler(
 
     let event = state.game_state.set_player_input(
         player_id,
-        move_x,
-        jump,
+        crate::types::Position {
+            x: player_x,
+            y: player_y,
+        },
         crate::types::Position { x: aim_x, y: aim_y },
         ability_id,
     );
