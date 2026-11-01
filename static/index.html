@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Wars on Goats - Solo Slice</title>
+    <style>
+      :root {
+        --bg: #111827;
+        --panel: #1f2937;
+        --panel-2: #374151;
+        --accent: #60a5fa;
+        --good: #34d399;
+        --warn: #fbbf24;
+        --danger: #f87171;
+      }
+      html, body {
+        margin: 0;
+        background: var(--bg);
+        color: white;
+        font-family: sans-serif;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        padding: 12px;
+      }
+      .toolbar {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+      button {
+        background: var(--accent);
+        color: white;
+        border: none;
+        border-radius: 6px;
+        padding: 8px 12px;
+        cursor: pointer;
+      }
+      #hud {
+        display: flex;
+        gap: 12px;
+        font-size: 14px;
+        background: var(--panel);
+        padding: 10px 14px;
+        border-radius: 8px;
+      }
+      canvas {
+        width: min(100%, 1024px);
+        height: auto;
+        background: linear-gradient(#111827, #0f172a);
+        border: 1px solid var(--panel-2);
+        border-radius: 8px;
+        display: block;
+      }
+      .legend {
+        font-size: 12px;
+        color: #d1d5db;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="toolbar">
+      <button id="startBtn">Start solo session</button>
+      <button id="resetBtn">Reset</button>
+      <span class="legend">Move: A/D or arrow keys · Jump: W / Space · Aim: mouse · Arc Blast: 1 or click</span>
+    </div>
+    <div id="hud">
+      <div>Health: <span id="healthLabel">100/100</span></div>
+      <div>Cooldown: <span id="cooldownLabel">Ready</span></div>
+      <div>Target: <span id="targetLabel">-</span></div>
+    </div>
+    <canvas id="game" width="1024" height="240"></canvas>
+
+    <script>
+      const canvas = document.getElementById('game');
+      const ctx = canvas.getContext('2d');
+      const startBtn = document.getElementById('startBtn');
+      const resetBtn = document.getElementById('resetBtn');
+      const healthLabel = document.getElementById('healthLabel');
+      const cooldownLabel = document.getElementById('cooldownLabel');
+      const targetLabel = document.getElementById('targetLabel');
+
+      const GROUND_Y = 190;
+      const PLAYER_HEIGHT = 36;
+      const PLAYER_WIDTH = 24;
+      const GRAVITY = 0.78;
+      const MOVE_SPEED = 3.8;
+      const JUMP_POWER = 12.5;
+      const PLATFORMS = [
+        { x: 0, y: 190, width: 1024, height: 50 },
+        { x: 120, y: 130, width: 180, height: 12 },
+        { x: 720, y: 130, width: 180, height: 12 },
+      ];
+
+      const state = {
+        playerId: '',
+        player: null,
+        targets: [],
+        keys: { left: false, right: false, jump: false },
+        aim: { x: 220, y: 120 },
+        cooldownUntil: 0,
+        lastTime: 0,
+        castEffect: null,
+        castPending: false,
+      };
+
+      function clamp(value, min, max) {
+        return Math.min(Math.max(value, min), max);
+      }
+
+      function updateHud() {
+        if (!state.player) return;
+        healthLabel.textContent = `${Math.max(0, Math.round(state.player.health))}/${Math.round(state.player.max_health)}`;
+        cooldownLabel.textContent = performance.now() < state.cooldownUntil ? 'Cooling...' : 'Ready';
+        const target = state.targets.find((t) => t.alive) || null;
+        targetLabel.textContent = target ? `${target.name} (${Math.round(target.health)})` : 'none';
+      }
+
+      function spawnPlayerFromPayload(payload) {
+        const spawnX = payload.spawn?.x ?? 120;
+        const spawnY = payload.spawn?.y ?? GROUND_Y - PLAYER_HEIGHT;
+        state.player = {
+          id: payload.player_id,
+          name: payload.name,
+          position: { x: spawnX, y: spawnY },
+          velocity: { x: 0, y: 0 },
+          onGround: true,
+          health: 100,
+          max_health: 100,
+          alive: true,
+        };
+
+        state.targets = (payload.targets || []).map((target) => ({
+          ...target,
+          position: { x: target.position?.x ?? 480, y: GROUND_Y - PLAYER_HEIGHT },
+          health: target.health ?? 100,
+          max_health: target.max_health ?? 100,
+          alive: target.alive ?? true,
+        }));
+      }
+
+      function startSoloSession() {
+        fetch('/solo/session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: 'Hero' })
+        })
+          .then((res) => res.json())
+          .then((payload) => {
+            state.playerId = payload.player_id;
+            spawnPlayerFromPayload(payload);
+            updateHud();
+          })
+          .catch(() => {
+            console.error('Failed to start solo session');
+          });
+      }
+
+      function resetSession() {
+        if (!state.playerId) return;
+        fetch('/solo/reset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ player_id: state.playerId })
+        })
+          .then((res) => res.json())
+          .then((payload) => {
+            if (payload.ok) {
+              state.player = {
+                ...state.player,
+                position: { x: payload.spawn?.x ?? 120, y: payload.spawn?.y ?? GROUND_Y - PLAYER_HEIGHT },
+                velocity: { x: 0, y: 0 },
+                onGround: true,
+                health: 100,
+                max_health: 100,
+                alive: true,
+              };
+              state.targets = payload.targets || state.targets;
+              state.cooldownUntil = 0;
+              state.castEffect = null;
+              state.castPending = false;
+              updateHud();
+            }
+          });
+      }
+
+      function sendInput({ cast = false } = {}) {
+        if (!state.playerId) return;
+        if (cast && (performance.now() < state.cooldownUntil || state.castPending)) return;
+        const abilityId = cast ? 'arc-blast' : null;
+        if (abilityId) state.castPending = true;
+        const castAim = { x: state.aim.x, y: state.aim.y };
+        const payload = {
+          player_id: state.playerId,
+          player_x: state.player.position.x,
+          player_y: state.player.position.y,
+          aim_x: castAim.x,
+          aim_y: castAim.y,
+          ability_id: abilityId,
+        };
+
+        fetch('/solo/input', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+          .then((res) => res.json())
+          .then((result) => {
+            if (abilityId) state.castPending = false;
+            if (abilityId && Array.isArray(result.targets)) {
+              state.targets = result.targets;
+            }
+            if (abilityId && result.cast_cooldown_remaining_ms > 0) {
+              state.cooldownUntil = performance.now() + result.cast_cooldown_remaining_ms;
+            }
+            if (abilityId && result.cast_succeeded) {
+              state.castEffect = {
+                from: {
+                  x: state.player.position.x,
+                  y: state.player.position.y + PLAYER_HEIGHT / 2,
+                },
+                to: castAim,
+                startedAt: performance.now(),
+                travelDuration: 300,
+                impactDuration: 300,
+              };
+            }
+            updateHud();
+          })
+          .catch((error) => {
+            if (abilityId) state.castPending = false;
+            console.error('Failed to send game input', error);
+          });
+      }
+
+      function handlePointerMove(event) {
+        const rect = canvas.getBoundingClientRect();
+        const scaleX = canvas.width / rect.width;
+        const scaleY = canvas.height / rect.height;
+        state.aim.x = clamp((event.clientX - rect.left) * scaleX, 0, canvas.width);
+        state.aim.y = clamp((event.clientY - rect.top) * scaleY, 0, canvas.height);
+      }
+
+      function handleCanvasClick(event) {
+        handlePointerMove(event);
+        sendInput({ cast: true });
+      }
+
+      function drawPlayer(player) {
+        const x = player.position.x;
+        const y = player.position.y;
+        ctx.fillStyle = '#60a5fa';
+        ctx.fillRect(x - PLAYER_WIDTH / 2, y, PLAYER_WIDTH, PLAYER_HEIGHT);
+        ctx.fillStyle = '#f8fafc';
+        ctx.fillRect(x - 6, y - 12, 12, 12);
+      }
+
+      function drawTarget(target) {
+        const x = target.position.x;
+        const y = target.position.y;
+        ctx.fillStyle = target.alive ? '#f87171' : '#4b5563';
+        ctx.fillRect(x - PLAYER_WIDTH / 2, y, PLAYER_WIDTH, PLAYER_HEIGHT);
+        ctx.fillStyle = target.alive ? '#f8fafc' : '#9ca3af';
+        ctx.font = '11px sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText(target.name, x, y - 7);
+        ctx.fillStyle = '#1f2937';
+        ctx.fillRect(x - 16, y + PLAYER_HEIGHT + 3, 32, 4);
+        ctx.fillStyle = target.alive ? '#f87171' : '#6b7280';
+        const healthRatio = target.max_health > 0
+          ? clamp(target.health / target.max_health, 0, 1)
+          : 0;
+        ctx.fillRect(x - 16, y + PLAYER_HEIGHT + 3, 32 * healthRatio, 4);
+      }
+
+      function drawAim() {
+        ctx.beginPath();
+        ctx.arc(state.aim.x, state.aim.y, 10, 0, Math.PI * 2);
+        ctx.strokeStyle = '#fbbf24';
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      }
+
+      function drawCastEffect() {
+        if (!state.castEffect) return;
+        const effect = state.castEffect;
+        const elapsed = performance.now() - effect.startedAt;
+        const progress = clamp(elapsed / effect.travelDuration, 0, 1);
+
+        if (elapsed < effect.travelDuration) {
+          ctx.beginPath();
+          ctx.moveTo(effect.from.x, effect.from.y);
+          ctx.lineTo(effect.to.x, effect.to.y);
+          ctx.strokeStyle = 'rgba(251, 191, 36, 0.35)';
+          ctx.lineWidth = 2;
+          ctx.stroke();
+
+          const projectileX = effect.from.x + (effect.to.x - effect.from.x) * progress;
+          const projectileY = effect.from.y + (effect.to.y - effect.from.y) * progress;
+          ctx.beginPath();
+          ctx.arc(projectileX, projectileY, 6, 0, Math.PI * 2);
+          ctx.fillStyle = '#fbbf24';
+          ctx.fill();
+          return;
+        }
+
+        const impactProgress = (elapsed - effect.travelDuration) / effect.impactDuration;
+        if (impactProgress >= 1) {
+          state.castEffect = null;
+          return;
+        }
+        ctx.beginPath();
+        ctx.arc(effect.to.x, effect.to.y, 10 + impactProgress * 70, 0, Math.PI * 2);
+        ctx.strokeStyle = `rgba(251, 191, 36, ${1 - impactProgress})`;
+        ctx.lineWidth = 3;
+        ctx.stroke();
+      }
+
+      function render() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = '#0f172a';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        ctx.fillStyle = '#374151';
+        ctx.fillRect(0, GROUND_Y, canvas.width, 50);
+        ctx.fillStyle = '#1f2937';
+        PLATFORMS.slice(1).forEach((platform) => {
+          ctx.fillRect(platform.x, platform.y, platform.width, platform.height);
+        });
+
+        if (state.player) {
+          drawPlayer(state.player);
+        }
+
+        state.targets.forEach(drawTarget);
+        drawCastEffect();
+        drawAim();
+      }
+
+      function tick() {
+        if (state.player) {
+          let move = 0;
+          if (state.keys.left) move -= 1;
+          if (state.keys.right) move += 1;
+          state.player.position.x = clamp(state.player.position.x + move * MOVE_SPEED, 32, 990);
+
+          const previousY = state.player.position.y;
+          if (state.keys.jump && state.player.onGround) {
+            state.player.velocity.y = -JUMP_POWER;
+            state.player.onGround = false;
+          }
+
+          state.player.velocity.y += GRAVITY;
+          state.player.position.y += state.player.velocity.y;
+
+          const floorY = GROUND_Y - PLAYER_HEIGHT;
+          if (state.player.position.y >= floorY) {
+            state.player.position.y = floorY;
+            state.player.velocity.y = 0;
+            state.player.onGround = true;
+          }
+
+          for (const platform of PLATFORMS.slice(1)) {
+            const platformTop = platform.y;
+            const overlapsPlatform = state.player.position.x + PLAYER_WIDTH / 2 > platform.x
+              && state.player.position.x - PLAYER_WIDTH / 2 < platform.x + platform.width;
+            const crossedPlatformTop = previousY + PLAYER_HEIGHT <= platformTop
+              && state.player.position.y + PLAYER_HEIGHT >= platformTop;
+            if (state.player.velocity.y >= 0 && overlapsPlatform && crossedPlatformTop) {
+              state.player.position.y = platformTop - PLAYER_HEIGHT;
+              state.player.velocity.y = 0;
+              state.player.onGround = true;
+            }
+          }
+
+          if (state.player.position.x < 0) state.player.position.x = 0;
+          if (state.player.position.x > canvas.width) state.player.position.x = canvas.width;
+        }
+
+        render();
+        updateHud();
+        requestAnimationFrame(tick);
+      }
+
+      window.addEventListener('keydown', (event) => {
+        const key = event.key.toLowerCase();
+        if (key === '1' && !event.repeat) {
+          sendInput({ cast: true });
+          return;
+        }
+        if (event.key === 'ArrowLeft' || key === 'a') state.keys.left = true;
+        if (event.key === 'ArrowRight' || key === 'd') state.keys.right = true;
+        if (event.key === ' ' || key === 'w' || key === 'arrowup') {
+          state.keys.jump = true;
+          sendInput({ cast: false });
+        }
+      });
+      window.addEventListener('keyup', (event) => {
+        const key = event.key.toLowerCase();
+        if (event.key === 'ArrowLeft' || key === 'a') state.keys.left = false;
+        if (event.key === 'ArrowRight' || key === 'd') state.keys.right = false;
+        if (event.key === ' ' || key === 'w' || key === 'arrowup') {
+          state.keys.jump = false;
+        }
+      });
+
+      canvas.addEventListener('mousemove', handlePointerMove);
+      canvas.addEventListener('click', handleCanvasClick);
+      startBtn.addEventListener('click', startSoloSession);
+      resetBtn.addEventListener('click', resetSession);
+
+      render();
+      requestAnimationFrame(tick);
+    </script>
+  </body>
+</html>
