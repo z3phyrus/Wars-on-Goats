@@ -148,6 +148,10 @@ async fn solo_session_handler(
         "player_id": player.id,
         "name": player.name,
         "spawn": { "x": player.position.x, "y": player.position.y },
+        "health": player.health,
+        "max_health": player.max_health,
+        "mana": player.mana,
+        "max_mana": player.max_mana,
         "targets": training_targets_json(&state.game_state, &player.id)
     }))
 }
@@ -174,10 +178,14 @@ async fn solo_input_handler(
         .get("ability_id")
         .and_then(|v| v.as_str())
         .map(str::to_string);
+    let is_moving = payload
+        .get("is_moving")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     let cast_attempted = ability_id.is_some();
     let requested_ability_id = ability_id.clone();
 
-    let event = state.game_state.set_player_input(
+    let input_result = state.game_state.set_player_input(
         player_id,
         crate::types::Position {
             x: player_x,
@@ -185,15 +193,30 @@ async fn solo_input_handler(
         },
         crate::types::Position { x: aim_x, y: aim_y },
         ability_id,
+        is_moving,
     );
+    let (event, cast_error) = match input_result {
+        Ok(event) => (event, None),
+        Err(error) => (None, Some(error)),
+    };
 
-    let cast_succeeded = cast_attempted && event.is_some();
+    let pending_cast = state.game_state.pending_cast_status(player_id);
+    let cast_started = cast_error.is_none()
+        && cast_attempted
+        && event.is_none()
+        && pending_cast
+            .as_ref()
+            .is_some_and(|cast| requested_ability_id.as_deref() == Some(cast.ability_id.as_str()));
+    let cast_completed = event.is_some();
+    let cast_succeeded = cast_started || cast_completed;
     let now_ms = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
+    let completed_ability_id = event.as_ref().map(|event| event.ability_id.clone());
     let cast_cooldown_remaining_ms = requested_ability_id
         .as_ref()
+        .or(completed_ability_id.as_ref())
         .and_then(|ability_id| {
             state
                 .game_state
@@ -203,14 +226,29 @@ async fn solo_input_handler(
         .map(|cooldown_until| cooldown_until.saturating_sub(now_ms))
         .unwrap_or(0);
     let targets = training_targets_json(&state.game_state, player_id);
+    let player = state.game_state.get_player(player_id);
 
     Json(serde_json::json!({
-        "ok": event.is_some() || !player_id.is_empty(),
+        "ok": cast_error.is_none() && (event.is_some() || !player_id.is_empty()),
         "cast_succeeded": cast_succeeded,
+        "cast_started": cast_started,
+        "cast_completed": cast_completed,
+        "cast_error": cast_error,
+        "cast_pending": pending_cast.is_some(),
+        "cast_ability_id": pending_cast.as_ref().map(|cast| &cast.ability_id),
+        "cast_name": pending_cast.as_ref().map(|cast| &cast.ability_name),
+        "cast_progress_ms": pending_cast.as_ref().map(|cast| cast.progress_ms),
+        "cast_time_ms": pending_cast.as_ref().map(|cast| cast.cast_time_ms),
         "cast_cooldown_remaining_ms": cast_cooldown_remaining_ms,
+        "mana": player.as_ref().map(|player| player.mana),
+        "max_mana": player.as_ref().map(|player| player.max_mana),
         "targets": targets,
         "event": event.map(|ev| {
             serde_json::json!({
+                "ability_id": ev.ability_id,
+                "ability_name": ev.ability_name,
+                "ability_color": ev.ability_color,
+                "interrupted_casts": ev.interrupted_casts,
                 "source_player": ev.source_player,
                 "affected_players": ev.affected_players,
                 "damage": ev.damage,
@@ -250,7 +288,9 @@ async fn solo_reset_handler(
     Json(serde_json::json!({
         "ok": reset.is_some(),
         "player_id": player_id,
-        "spawn": reset.map(|player| { serde_json::json!({ "x": player.position.x, "y": player.position.y }) }),
+        "spawn": reset.as_ref().map(|player| { serde_json::json!({ "x": player.position.x, "y": player.position.y }) }),
+        "mana": reset.as_ref().map(|player| player.mana),
+        "max_mana": reset.as_ref().map(|player| player.max_mana),
         "targets": training_targets_json(&state.game_state, player_id)
     }))
 }

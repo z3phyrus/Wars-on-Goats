@@ -1,6 +1,7 @@
 mod app;
 mod db;
 mod game;
+mod spells;
 mod types;
 
 use std::net::SocketAddr;
@@ -13,7 +14,7 @@ use crate::{
 };
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     let state = Arc::new(AppState {
@@ -26,6 +27,15 @@ async fn main() {
     tracing::info!("starting server on {}", addr);
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
-        .await
-        .unwrap();
+        .with_graceful_shutdown(async {
+            match tokio::signal::ctrl_c().await {
+                Ok(()) => tracing::info!("shutdown signal received; stopping server"),
+                Err(error) => {
+                    tracing::error!(%error, "failed to listen for shutdown signal; stopping server");
+                }
+            }
+        })
+        .await?;
+
+    Ok(())
 }
