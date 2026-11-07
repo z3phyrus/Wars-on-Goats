@@ -67,6 +67,7 @@ pub struct AbilityDefinition {
     pub kind: AbilityKind,
     pub target: AbilityTarget,
     pub range: f32,
+    pub cost: f32,
     pub cooldown_ms: u64,
     pub cast_time_ms: u64,
     pub duration_ms: u64,
@@ -75,6 +76,7 @@ pub struct AbilityDefinition {
     pub effects: Vec<StatusEffect>,
     pub min_damage: f32,
     pub max_damage: f32,
+    pub color: String,
 }
 
 #[allow(dead_code)]
@@ -95,6 +97,10 @@ pub struct GameplayInput {
 #[allow(dead_code)]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CombatEvent {
+    pub ability_id: String,
+    pub ability_name: String,
+    pub ability_color: String,
+    pub interrupted_casts: Vec<String>,
     pub source_player: String,
     pub target_player: Option<String>,
     pub affected_players: Vec<String>,

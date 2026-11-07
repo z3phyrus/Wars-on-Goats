@@ -5,10 +5,11 @@ use std::{
     time::{Duration, Instant},
 };
 
+use crate::spells::spell_by_id;
 use crate::types::{
-    AbilityArea, AbilityCastRequest, AbilityDefinition, AbilityKind, AbilityTarget, AreaAnchor,
-    CombatEvent, GameMode, MatchState, PlayerReadyState, Position, Status, StatusEffect,
-    TalentBuild, TeamId, Velocity, VisibilityState, WorldMap,
+    AbilityArea, AbilityCastRequest, AbilityDefinition, AbilityTarget, AreaAnchor, CombatEvent,
+    GameMode, MatchState, PlayerReadyState, Position, Status, StatusEffect, TalentBuild, TeamId,
+    Velocity, VisibilityState, WorldMap,
 };
 
 // ============ Player ============
@@ -22,6 +23,9 @@ pub struct Player {
     pub velocity: Velocity,
     pub health: f32,
     pub max_health: f32,
+    pub mana: f32,
+    pub max_mana: f32,
+    pub pending_cast: Option<PendingCast>,
     pub alive: bool,
     pub statuses: Vec<Status>,
     pub ability_cooldowns: HashMap<String, u64>,
@@ -42,6 +46,9 @@ impl Player {
             velocity: Velocity { dx: 0.0, dy: 0.0 },
             health: 100.0,
             max_health: 100.0,
+            mana: 100.0,
+            max_mana: 100.0,
+            pending_cast: None,
             alive: true,
             statuses: Vec::new(),
             ability_cooldowns: HashMap::new(),
@@ -57,6 +64,24 @@ impl Player {
             + (self.position.y - other.position.y).powi(2))
         .sqrt()
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PendingCast {
+    pub ability_id: String,
+    pub aim_position: Position,
+    pub cast_time_ms: u64,
+    pub progress_ms: u64,
+    pub last_updated_at_ms: u64,
+    pub last_damage_delay_at_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PendingCastStatus {
+    pub ability_id: String,
+    pub ability_name: String,
+    pub progress_ms: u64,
+    pub cast_time_ms: u64,
 }
 
 // ============ Team ============
@@ -438,7 +463,10 @@ impl GameState {
                 player_state.velocity = Velocity { dx: 0.0, dy: 0.0 };
                 player_state.health = 100.0;
                 player_state.max_health = 100.0;
+                player_state.mana = 100.0;
+                player_state.max_mana = 100.0;
                 player_state.alive = true;
+                player_state.pending_cast = None;
                 player_state.on_ground = true;
                 player_state.ability_cooldowns.clear();
             }
@@ -464,6 +492,9 @@ impl GameState {
                         velocity: Velocity { dx: 0.0, dy: 0.0 },
                         health: 100.0,
                         max_health: 100.0,
+                        mana: 100.0,
+                        max_mana: 100.0,
+                        pending_cast: None,
                         alive: true,
                         statuses: Vec::new(),
                         ability_cooldowns: HashMap::new(),
@@ -513,7 +544,10 @@ impl GameState {
             player_state.velocity = Velocity { dx: 0.0, dy: 0.0 };
             player_state.health = 100.0;
             player_state.max_health = 100.0;
+            player_state.mana = 100.0;
+            player_state.max_mana = 100.0;
             player_state.alive = true;
+            player_state.pending_cast = None;
             player_state.on_ground = true;
             player_state.ability_cooldowns.clear();
         }
@@ -543,7 +577,14 @@ impl GameState {
                 "position": { "x": player.position.x, "y": player.position.y },
                 "health": player.health,
                 "max_health": player.max_health,
+                "mana": player.mana,
+                "max_mana": player.max_mana,
                 "alive": player.alive,
+                "pending_cast": player.pending_cast.as_ref().map(|cast| serde_json::json!({
+                    "ability_id": cast.ability_id,
+                    "progress_ms": cast.progress_ms,
+                    "cast_time_ms": cast.cast_time_ms
+                })),
                 "statuses": player.statuses.iter().map(|status| serde_json::json!({
                     "effect": format!("{:?}", status.effect),
                     "duration_ms": status.duration_ms,
@@ -566,30 +607,149 @@ impl GameState {
         player_position: Position,
         aim: Position,
         ability_id: Option<String>,
-    ) -> Option<CombatEvent> {
-        {
-            let mut players = self.players.lock().unwrap();
-            let player_state = players.get_mut(player_id)?;
-            if !player_state.alive {
-                return None;
-            }
-            player_state.position = player_position;
+        is_moving: bool,
+    ) -> Result<Option<CombatEvent>, String> {
+        let now_ms = current_time_ms();
+        let completed_cast = self.advance_player_cast(player_id, now_ms)?;
+        let mut players = self.players.lock().unwrap();
+        let player_state = players
+            .get_mut(player_id)
+            .ok_or_else(|| "player not found".to_string())?;
+        if !player_state.alive {
+            return if ability_id.is_some() {
+                Err("attacker is dead".to_string())
+            } else {
+                Ok(None)
+            };
+        }
+        player_state.position = player_position;
+        if is_moving && player_state.pending_cast.take().is_some() {
+            return Err("cast interrupted by movement".to_string());
+        }
+        if ability_id.is_some() && player_state.pending_cast.is_some() {
+            return Err("already casting".to_string());
+        }
+        drop(players);
+
+        if completed_cast.is_some() {
+            return Ok(completed_cast);
         }
 
         if let Some(ability_name) = ability_id {
-            let ability = default_training_ability();
-            if ability_name == ability.id {
+            let spell = spell_by_id(&ability_name)
+                .ok_or_else(|| format!("unknown ability {ability_name}"))?;
+            let request = AbilityCastRequest { aim_position: aim };
+            if spell.definition().cast_time_ms == 0 {
                 return self
-                    .cast_ability(
-                        player_id,
-                        &ability,
-                        &AbilityCastRequest { aim_position: aim },
-                    )
-                    .ok();
+                    .cast_spell(player_id, spell.as_ref(), &request)
+                    .map(Some);
             }
+            self.start_spell_cast(player_id, spell.definition(), &request, is_moving, now_ms)?;
         }
 
-        None
+        Ok(None)
+    }
+
+    fn start_spell_cast(
+        &self,
+        caster_id: &str,
+        ability: &AbilityDefinition,
+        request: &AbilityCastRequest,
+        is_moving: bool,
+        now_ms: u64,
+    ) -> Result<(), String> {
+        if is_moving {
+            return Err("cannot begin a cast while moving".to_string());
+        }
+        let mut players = self.players.lock().unwrap();
+        let caster = players
+            .get(caster_id)
+            .ok_or_else(|| "attacker not found".to_string())?;
+        if !caster.alive {
+            return Err("attacker is dead".to_string());
+        }
+        if caster
+            .statuses
+            .iter()
+            .any(|status| matches!(status.effect, StatusEffect::Silence) && status.duration_ms > 0)
+        {
+            return Err("attacker is silenced".to_string());
+        }
+        if distance_between(&caster.position, &request.aim_position) > ability.range {
+            return Err("target is out of range".to_string());
+        }
+        if caster.pending_cast.is_some() {
+            return Err("already casting".to_string());
+        }
+        if caster
+            .ability_cooldowns
+            .get(&ability.id)
+            .is_some_and(|cooldown_until| *cooldown_until > now_ms)
+        {
+            return Err("ability is on cooldown".to_string());
+        }
+        if caster.mana < ability.cost {
+            return Err("not enough mana".to_string());
+        }
+        let caster = players
+            .get_mut(caster_id)
+            .ok_or_else(|| "attacker not found".to_string())?;
+        caster.pending_cast = Some(PendingCast {
+            ability_id: ability.id.clone(),
+            aim_position: request.aim_position.clone(),
+            cast_time_ms: ability.cast_time_ms,
+            progress_ms: 0,
+            last_updated_at_ms: now_ms,
+            last_damage_delay_at_ms: None,
+        });
+        Ok(())
+    }
+
+    fn advance_player_cast(
+        &self,
+        player_id: &str,
+        now_ms: u64,
+    ) -> Result<Option<CombatEvent>, String> {
+        let completed_cast = {
+            let mut players = self.players.lock().unwrap();
+            let Some(player) = players.get_mut(player_id) else {
+                return Err("player not found".to_string());
+            };
+            let Some(pending_cast) = player.pending_cast.as_mut() else {
+                return Ok(None);
+            };
+            advance_pending_cast(pending_cast, now_ms);
+            if pending_cast.progress_ms >= pending_cast.cast_time_ms {
+                player.pending_cast.take()
+            } else {
+                None
+            }
+        };
+        let Some(completed_cast) = completed_cast else {
+            return Ok(None);
+        };
+        let spell = spell_by_id(&completed_cast.ability_id)
+            .ok_or_else(|| format!("unknown ability {}", completed_cast.ability_id))?;
+        self.cast_spell(
+            player_id,
+            spell.as_ref(),
+            &AbilityCastRequest {
+                aim_position: completed_cast.aim_position,
+            },
+        )
+        .map(Some)
+    }
+
+    pub fn pending_cast_status(&self, player_id: &str) -> Option<PendingCastStatus> {
+        let players = self.players.lock().unwrap();
+        let pending_cast = players.get(player_id)?.pending_cast.as_ref()?;
+        let spell = spell_by_id(&pending_cast.ability_id)?;
+        Some(PendingCastStatus {
+            ability_id: pending_cast.ability_id.clone(),
+            ability_name: spell.definition().name.clone(),
+            progress_ms: pending_cast.progress_ms,
+            cast_time_ms: pending_cast.cast_time_ms,
+        })
     }
 
     #[allow(dead_code)]
@@ -610,7 +770,6 @@ impl GameState {
         let hero_position = players
             .get(&player_id)
             .map(|player| player.position.clone());
-
         for player in players.values_mut() {
             if player.name.starts_with("training-target-") {
                 if let Some(hero_position) = &hero_position {
@@ -703,9 +862,11 @@ impl GameState {
 
     #[allow(dead_code)]
     pub fn tick_status_effects(&self) {
+        let now_ms = current_time_ms();
         let mut players = self.players.lock().unwrap();
         for player in players.values_mut() {
             let mut remaining = Vec::new();
+            let mut damage = 0.0;
             for status in &player.statuses {
                 let updated_duration = status.duration_ms.saturating_sub(100);
                 if updated_duration > 0 {
@@ -715,30 +876,35 @@ impl GameState {
                         intensity: status.intensity,
                     });
                 } else if matches!(status.effect, StatusEffect::Burn | StatusEffect::Poison) {
-                    player.health = (player.health - status.intensity * 8.0).max(0.0);
-                    if player.health <= 0.0 {
-                        player.alive = false;
-                    }
+                    damage += status.intensity * 8.0;
                 }
             }
             player.statuses = remaining;
+            if damage > 0.0 {
+                player.health = (player.health - damage).max(0.0);
+                if player.health <= 0.0 {
+                    player.alive = false;
+                    player.pending_cast = None;
+                } else {
+                    delay_cast_after_damage(player, now_ms);
+                }
+            }
         }
     }
 
-    #[allow(dead_code)]
-    pub fn cast_ability(
+    pub fn cast_spell(
         &self,
         attacker_id: &str,
-        ability: &AbilityDefinition,
+        spell: &dyn Spell,
         request: &AbilityCastRequest,
     ) -> Result<CombatEvent, String> {
-        let attacker_snapshot = {
-            let players = self.players.lock().unwrap();
-            players
-                .get(attacker_id)
-                .cloned()
-                .ok_or_else(|| "attacker not found".to_string())?
-        };
+        let ability = spell.definition();
+        let now_ms = current_time_ms();
+        let mut players = self.players.lock().unwrap();
+        let attacker_snapshot = players
+            .get(attacker_id)
+            .cloned()
+            .ok_or_else(|| "attacker not found".to_string())?;
 
         if !attacker_snapshot.alive {
             return Err("attacker is dead".to_string());
@@ -757,98 +923,170 @@ impl GameState {
             return Err("target is out of range".to_string());
         }
 
-        let now_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis() as u64;
-
+        let attacker = players
+            .get_mut(attacker_id)
+            .ok_or_else(|| "attacker not found".to_string())?;
+        if let Some(cooldown_until) = attacker.ability_cooldowns.get(&ability.id)
+            && *cooldown_until > now_ms
         {
-            let mut players = self.players.lock().unwrap();
-            let attacker = players
-                .get_mut(attacker_id)
-                .ok_or_else(|| "attacker not found".to_string())?;
-            if let Some(cooldown_until) = attacker.ability_cooldowns.get(&ability.id)
-                && *cooldown_until > now_ms
-            {
-                return Err("ability is on cooldown".to_string());
-            }
-            attacker
-                .ability_cooldowns
-                .insert(ability.id.clone(), now_ms + ability.cooldown_ms);
+            return Err("ability is on cooldown".to_string());
         }
+        if attacker.mana < ability.cost {
+            return Err("not enough mana".to_string());
+        }
+        attacker.mana -= ability.cost;
+        attacker.ability_cooldowns.insert(
+            ability.id.clone(),
+            now_ms.saturating_add(ability.cooldown_ms),
+        );
 
-        let damage = (ability.min_damage + ability.max_damage) / 2.0;
         let mut affected_players = Vec::new();
-        {
-            let mut players = self.players.lock().unwrap();
-            let target_ids: Vec<String> = players
-                .iter()
-                .filter(|(player_id, player)| {
-                    (player_id.as_str() != attacker_id
-                        || matches!(&ability.target, AbilityTarget::SelfCast))
-                        && player.alive
-                        && target_matches(
-                            player_id,
-                            attacker_id,
-                            ability.target.clone(),
-                            attacker_snapshot.team_id,
-                            player.team_id,
-                        )
-                        && area_contains(
-                            &ability.area,
-                            &attacker_snapshot.position,
-                            &player.position,
-                            &request.aim_position,
-                        )
-                })
-                .map(|(player_id, _)| player_id.clone())
-                .collect();
+        let mut total_damage = 0.0;
+        let mut total_healing = 0.0;
+        let mut applied_effects = Vec::new();
+        let mut interrupted_casts = Vec::new();
+        let target_ids: Vec<String> = players
+            .iter()
+            .filter(|(player_id, player)| {
+                (player_id.as_str() != attacker_id
+                    || matches!(&ability.target, AbilityTarget::SelfCast))
+                    && player.alive
+                    && target_matches(
+                        player_id,
+                        attacker_id,
+                        ability.target.clone(),
+                        attacker_snapshot.team_id,
+                        player.team_id,
+                    )
+                    && area_contains(
+                        &ability.area,
+                        &attacker_snapshot.position,
+                        &player.position,
+                        &request.aim_position,
+                    )
+            })
+            .map(|(player_id, _)| player_id.clone())
+            .collect();
 
-            for target_id in target_ids {
-                if let Some(target) = players.get_mut(&target_id) {
-                    target.health = (target.health - damage).max(0.0);
-                    if target.health <= 0.0 {
-                        target.alive = false;
-                    }
-                    affected_players.push(target_id);
+        for target_id in target_ids {
+            if let Some(target) = players.get_mut(&target_id) {
+                let hit = spell.on_hit(&attacker_snapshot, target);
+                if hit.damage > 0.0 {
+                    delay_cast_after_damage(target, now_ms);
                 }
+                if hit.interrupt_cast && target.pending_cast.take().is_some() {
+                    interrupted_casts.push(target_id.clone());
+                }
+                total_damage += hit.damage;
+                total_healing += hit.healing;
+                for effect in hit.status_effects {
+                    if !applied_effects.contains(&effect) {
+                        applied_effects.push(effect);
+                    }
+                }
+                affected_players.push(target_id);
             }
         }
 
         let event = CombatEvent {
+            ability_id: ability.id.clone(),
+            ability_name: ability.name.clone(),
+            ability_color: ability.color.clone(),
+            interrupted_casts,
             source_player: attacker_snapshot.id.clone(),
             target_player: affected_players.first().cloned(),
             affected_players,
             target_zone: None,
             aim_position: request.aim_position.clone(),
-            damage,
-            healing: 0.0,
-            status_effects: ability.effects.clone(),
+            damage: total_damage,
+            healing: total_healing,
+            status_effects: applied_effects,
         };
 
         Ok(event)
     }
 }
 
-fn default_training_ability() -> AbilityDefinition {
-    AbilityDefinition {
-        id: "arc-blast".to_string(),
-        name: "Arc Blast".to_string(),
-        kind: AbilityKind::AreaOfEffect,
-        target: AbilityTarget::Enemy,
-        range: 420.0,
-        cooldown_ms: 500,
-        cast_time_ms: 0,
-        duration_ms: 0,
-        follows_caster: false,
-        area: AbilityArea::Circle {
-            radius: 90.0,
-            anchor: AreaAnchor::AimPoint,
-        },
-        effects: vec![StatusEffect::Slow],
-        min_damage: 12.0,
-        max_damage: 22.0,
+pub trait Spell: Send + Sync {
+    fn definition(&self) -> &AbilityDefinition;
+
+    fn on_hit(&self, _caster: &Player, target: &mut Player) -> SpellHit {
+        apply_default_spell_hit(self.definition(), target)
     }
+}
+
+impl Spell for AbilityDefinition {
+    fn definition(&self) -> &AbilityDefinition {
+        self
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct SpellHit {
+    pub damage: f32,
+    pub healing: f32,
+    pub status_effects: Vec<StatusEffect>,
+    pub interrupt_cast: bool,
+}
+
+pub fn apply_default_spell_hit(ability: &AbilityDefinition, target: &mut Player) -> SpellHit {
+    let damage = (ability.min_damage + ability.max_damage) / 2.0;
+    target.health = (target.health - damage).max(0.0);
+    if target.health <= 0.0 {
+        target.alive = false;
+        target.pending_cast = None;
+    }
+
+    for effect in &ability.effects {
+        target.statuses.push(Status {
+            effect: effect.clone(),
+            duration_ms: ability.duration_ms,
+            intensity: 1.0,
+        });
+    }
+
+    SpellHit {
+        damage,
+        healing: 0.0,
+        status_effects: ability.effects.clone(),
+        interrupt_cast: false,
+    }
+}
+
+fn current_time_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn advance_pending_cast(pending_cast: &mut PendingCast, now_ms: u64) {
+    pending_cast.progress_ms = pending_cast
+        .progress_ms
+        .saturating_add(now_ms.saturating_sub(pending_cast.last_updated_at_ms));
+    pending_cast.last_updated_at_ms = now_ms;
+}
+
+fn delay_cast_after_damage(player: &mut Player, now_ms: u64) {
+    let Some(pending_cast) = player.pending_cast.as_mut() else {
+        return;
+    };
+    advance_pending_cast(pending_cast, now_ms);
+    let can_delay = pending_cast
+        .last_damage_delay_at_ms
+        .is_none_or(|last_delay| now_ms.saturating_sub(last_delay) >= 1000);
+    if can_delay {
+        pending_cast.progress_ms = pending_cast.progress_ms.saturating_sub(100);
+        pending_cast.last_damage_delay_at_ms = Some(now_ms);
+    }
+}
+
+#[cfg(test)]
+fn default_training_ability() -> AbilityDefinition {
+    spell_by_id("arc-blast")
+        .expect("Arc Blast is registered")
+        .definition()
+        .clone()
 }
 
 fn distance_between(a: &Position, b: &Position) -> f32 {
@@ -993,9 +1231,11 @@ mod tests {
             effects: vec![],
             min_damage: 10.0,
             max_damage: 18.0,
+            cost: 0.0,
+            color: "#ffffff".to_string(),
         };
 
-        let result = world.cast_ability(
+        let result = world.cast_spell(
             &attacker.id,
             &ability,
             &AbilityCastRequest {
@@ -1005,7 +1245,7 @@ mod tests {
         assert!(result.is_ok());
         assert!(world.get_player(&defender.id).unwrap().health < 100.0);
 
-        let second = world.cast_ability(
+        let second = world.cast_spell(
             &attacker.id,
             &ability,
             &AbilityCastRequest {
@@ -1046,10 +1286,12 @@ mod tests {
             effects: vec![],
             min_damage: 10.0,
             max_damage: 10.0,
+            cost: 0.0,
+            color: "#ffffff".to_string(),
         };
 
         let event = world
-            .cast_ability(
+            .cast_spell(
                 &attacker.id,
                 &ability,
                 &AbilityCastRequest {
@@ -1059,6 +1301,329 @@ mod tests {
             .unwrap();
         assert!(event.affected_players.is_empty());
         assert!(world.get_player(&defender.id).unwrap().alive);
+    }
+
+    #[test]
+    fn spell_can_override_hit_behavior_and_spend_mana() {
+        struct PoisonSpell(AbilityDefinition);
+
+        impl Spell for PoisonSpell {
+            fn definition(&self) -> &AbilityDefinition {
+                &self.0
+            }
+
+            fn on_hit(&self, _caster: &Player, target: &mut Player) -> SpellHit {
+                let mut hit = apply_default_spell_hit(self.definition(), target);
+                target.health = (target.health - 5.0).max(0.0);
+                hit.damage += 5.0;
+                target.statuses.push(Status {
+                    effect: StatusEffect::Poison,
+                    duration_ms: 5000,
+                    intensity: 0.5,
+                });
+                hit.status_effects.push(StatusEffect::Poison);
+                hit
+            }
+        }
+
+        let world = GameState::new();
+        let attacker = world.register_player("attacker".to_string());
+        let defender = world.register_player("defender".to_string());
+        world.get_player_mut(&attacker.id, |player| {
+            player.team_id = Some(TeamId::Team1);
+            player.position = Position { x: 10.0, y: 10.0 };
+            player.health = 90.0;
+            player.mana = 25.0;
+        });
+        world.get_player_mut(&defender.id, |player| {
+            player.team_id = Some(TeamId::Team2);
+            player.position = Position { x: 12.0, y: 10.0 };
+            player.health = 50.0;
+        });
+
+        let spell = PoisonSpell(AbilityDefinition {
+            id: "poison-bolt".to_string(),
+            name: "Poison Bolt".to_string(),
+            kind: AbilityKind::SingleTarget,
+            target: AbilityTarget::Enemy,
+            range: 30.0,
+            cost: 20.0,
+            cooldown_ms: 0,
+            cast_time_ms: 0,
+            duration_ms: 3000,
+            follows_caster: false,
+            area: AbilityArea::Circle {
+                radius: 5.0,
+                anchor: AreaAnchor::AimPoint,
+            },
+            effects: vec![],
+            min_damage: 8.0,
+            max_damage: 12.0,
+            color: "#22c55e".to_string(),
+        });
+
+        let event = world
+            .cast_spell(
+                &attacker.id,
+                &spell,
+                &AbilityCastRequest {
+                    aim_position: Position { x: 12.0, y: 10.0 },
+                },
+            )
+            .unwrap();
+
+        assert_eq!(world.get_player(&attacker.id).unwrap().mana, 5.0);
+        assert_eq!(world.get_player(&defender.id).unwrap().health, 35.0);
+        assert!(
+            world
+                .get_player(&defender.id)
+                .unwrap()
+                .statuses
+                .iter()
+                .any(|status| status.effect == StatusEffect::Poison)
+        );
+        assert_eq!(event.damage, 15.0);
+        assert_eq!(event.ability_color, "#22c55e");
+        assert_eq!(event.status_effects, vec![StatusEffect::Poison]);
+
+        assert!(
+            world
+                .cast_spell(
+                    &attacker.id,
+                    &spell,
+                    &AbilityCastRequest {
+                        aim_position: Position { x: 12.0, y: 10.0 },
+                    }
+                )
+                .is_err()
+        );
+        assert_eq!(world.get_player(&attacker.id).unwrap().mana, 5.0);
+    }
+
+    #[test]
+    fn cast_time_is_delayed_and_movement_cancels_without_cost() {
+        let world = GameState::new();
+        let caster = world.register_player("caster".to_string());
+        let target = world.register_player("target".to_string());
+        world.get_player_mut(&caster.id, |player| {
+            player.team_id = Some(TeamId::Team1);
+            player.position = Position { x: 10.0, y: 10.0 };
+        });
+        world.get_player_mut(&target.id, |player| {
+            player.team_id = Some(TeamId::Team2);
+            player.position = Position { x: 12.0, y: 10.0 };
+        });
+
+        let mut ability = default_training_ability();
+        ability.cast_time_ms = 3000;
+        let request = AbilityCastRequest {
+            aim_position: Position { x: 12.0, y: 10.0 },
+        };
+
+        assert_eq!(
+            world
+                .start_spell_cast(&caster.id, &ability, &request, true, current_time_ms())
+                .unwrap_err(),
+            "cannot begin a cast while moving"
+        );
+        world
+            .start_spell_cast(&caster.id, &ability, &request, false, current_time_ms())
+            .unwrap();
+        let status = world.pending_cast_status(&caster.id).unwrap();
+        assert_eq!(status.ability_id, "arc-blast");
+        assert_eq!(status.ability_name, "Arc Blast");
+        assert_eq!(status.cast_time_ms, 3000);
+        assert_eq!(status.progress_ms, 0);
+        assert_eq!(world.get_player(&caster.id).unwrap().mana, 100.0);
+        assert!(
+            world
+                .get_player(&caster.id)
+                .unwrap()
+                .ability_cooldowns
+                .is_empty()
+        );
+
+        let last_updated = current_time_ms();
+        world.get_player_mut(&caster.id, |player| {
+            let cast = player.pending_cast.as_mut().unwrap();
+            cast.progress_ms = 2999;
+            cast.last_updated_at_ms = last_updated;
+        });
+        let completed = world
+            .advance_player_cast(&caster.id, last_updated + 1)
+            .unwrap()
+            .unwrap();
+        assert_eq!(completed.affected_players, vec![target.id.clone()]);
+        assert_eq!(world.get_player(&caster.id).unwrap().mana, 85.0);
+        assert!(
+            world
+                .get_player(&caster.id)
+                .unwrap()
+                .ability_cooldowns
+                .contains_key("arc-blast")
+        );
+
+        world.get_player_mut(&caster.id, |player| {
+            player.ability_cooldowns.clear();
+        });
+        world
+            .start_spell_cast(&caster.id, &ability, &request, false, current_time_ms())
+            .unwrap();
+        let movement = world.set_player_input(
+            &caster.id,
+            Position { x: 11.0, y: 10.0 },
+            request.aim_position,
+            None,
+            true,
+        );
+        assert_eq!(movement.unwrap_err(), "cast interrupted by movement");
+        let caster = world.get_player(&caster.id).unwrap();
+        assert!(caster.pending_cast.is_none());
+        assert_eq!(caster.mana, 85.0);
+        assert!(caster.ability_cooldowns.is_empty());
+    }
+
+    #[test]
+    fn damage_delays_cast_and_explicit_spell_interrupt_cancels_it() {
+        struct InterruptSpell(AbilityDefinition);
+
+        impl Spell for InterruptSpell {
+            fn definition(&self) -> &AbilityDefinition {
+                &self.0
+            }
+
+            fn on_hit(&self, caster: &Player, target: &mut Player) -> SpellHit {
+                let mut hit = apply_default_spell_hit(self.definition(), target);
+                hit.interrupt_cast = caster.id != target.id;
+                hit
+            }
+        }
+
+        let world = GameState::new();
+        let attacker = world.register_player("attacker".to_string());
+        let caster = world.register_player("caster".to_string());
+        world.get_player_mut(&attacker.id, |player| {
+            player.team_id = Some(TeamId::Team1);
+            player.position = Position { x: 10.0, y: 10.0 };
+        });
+        world.get_player_mut(&caster.id, |player| {
+            player.team_id = Some(TeamId::Team2);
+            player.position = Position { x: 20.0, y: 10.0 };
+        });
+
+        let pending_ability = AbilityDefinition {
+            id: "channel".to_string(),
+            name: "Channel".to_string(),
+            kind: AbilityKind::SingleTarget,
+            target: AbilityTarget::Enemy,
+            range: 100.0,
+            cost: 0.0,
+            cooldown_ms: 0,
+            cast_time_ms: 3000,
+            duration_ms: 0,
+            follows_caster: false,
+            area: AbilityArea::Circle {
+                radius: 5.0,
+                anchor: AreaAnchor::AimPoint,
+            },
+            effects: vec![],
+            min_damage: 1.0,
+            max_damage: 1.0,
+            color: "#ffffff".to_string(),
+        };
+        let request = AbilityCastRequest {
+            aim_position: Position { x: 20.0, y: 10.0 },
+        };
+        world
+            .start_spell_cast(
+                &caster.id,
+                &pending_ability,
+                &request,
+                false,
+                current_time_ms(),
+            )
+            .unwrap();
+        let progress_updated_at = current_time_ms();
+        world.get_player_mut(&caster.id, |player| {
+            let cast = player.pending_cast.as_mut().unwrap();
+            cast.progress_ms = 1500;
+            cast.last_updated_at_ms = progress_updated_at;
+        });
+
+        let damage_ability = AbilityDefinition {
+            id: "damage".to_string(),
+            name: "Damage".to_string(),
+            kind: AbilityKind::SingleTarget,
+            target: AbilityTarget::Enemy,
+            range: 100.0,
+            cost: 0.0,
+            cooldown_ms: 0,
+            cast_time_ms: 0,
+            duration_ms: 0,
+            follows_caster: false,
+            area: AbilityArea::Circle {
+                radius: 5.0,
+                anchor: AreaAnchor::AimPoint,
+            },
+            effects: vec![],
+            min_damage: 5.0,
+            max_damage: 5.0,
+            color: "#ffffff".to_string(),
+        };
+        let damage_request = AbilityCastRequest {
+            aim_position: Position { x: 20.0, y: 10.0 },
+        };
+        world
+            .cast_spell(&attacker.id, &damage_ability, &damage_request)
+            .unwrap();
+        let progress_after_hit = world
+            .get_player(&caster.id)
+            .unwrap()
+            .pending_cast
+            .as_ref()
+            .unwrap()
+            .progress_ms;
+        assert!((1400..=1410).contains(&progress_after_hit));
+
+        world
+            .cast_spell(&attacker.id, &damage_ability, &damage_request)
+            .unwrap();
+        let progress_after_second_hit = world
+            .get_player(&caster.id)
+            .unwrap()
+            .pending_cast
+            .as_ref()
+            .unwrap()
+            .progress_ms;
+        assert!(progress_after_second_hit >= progress_after_hit);
+        assert!(progress_after_second_hit - progress_after_hit < 100);
+
+        let progress_before_delayed_hit = progress_after_second_hit;
+        world.get_player_mut(&caster.id, |player| {
+            player
+                .pending_cast
+                .as_mut()
+                .unwrap()
+                .last_damage_delay_at_ms = Some(current_time_ms().saturating_sub(1000));
+        });
+        world
+            .cast_spell(&attacker.id, &damage_ability, &damage_request)
+            .unwrap();
+        let progress_after_delayed_hit = world
+            .get_player(&caster.id)
+            .unwrap()
+            .pending_cast
+            .as_ref()
+            .unwrap()
+            .progress_ms;
+        assert!(progress_after_delayed_hit < progress_before_delayed_hit - 90);
+
+        let interrupt_spell = InterruptSpell(damage_ability);
+        let event = world
+            .cast_spell(&attacker.id, &interrupt_spell, &damage_request)
+            .unwrap();
+        assert_eq!(event.interrupted_casts, vec![caster.id.clone()]);
+        assert!(world.get_player(&caster.id).unwrap().pending_cast.is_none());
     }
 
     #[test]
@@ -1098,11 +1663,17 @@ mod tests {
         let world = GameState::new();
         let player = world.start_local_solo_session("hero");
 
-        world.set_player_input(
-            &player.id,
-            Position { x: 128.0, y: 154.0 },
-            Position { x: 260.0, y: 120.0 },
-            Some("arc-blast".to_string()),
+        assert!(
+            world
+                .set_player_input(
+                    &player.id,
+                    Position { x: 128.0, y: 154.0 },
+                    Position { x: 260.0, y: 120.0 },
+                    Some("arc-blast".to_string()),
+                    false,
+                )
+                .unwrap()
+                .is_some()
         );
         world.advance_local_world(16);
 
@@ -1125,7 +1696,7 @@ mod tests {
 
         let mut ability = default_training_ability();
         ability.cooldown_ms = 0;
-        let outcome = world.cast_ability(
+        let outcome = world.cast_spell(
             &player.id,
             &ability,
             &AbilityCastRequest {
@@ -1148,6 +1719,7 @@ mod tests {
             state.position = Position { x: 900.0, y: 80.0 };
             state.health = 0.0;
             state.alive = false;
+            state.mana = 10.0;
             state
                 .ability_cooldowns
                 .insert("arc-blast".to_string(), u64::MAX);
@@ -1158,6 +1730,7 @@ mod tests {
         assert_eq!(reset.position.x, 120.0);
         assert_eq!(reset.position.y, 154.0);
         assert_eq!(reset.health, 100.0);
+        assert_eq!(reset.mana, 100.0);
         assert!(reset.alive);
         assert!(reset.ability_cooldowns.is_empty());
     }
@@ -1177,8 +1750,10 @@ mod tests {
                 Position { x: 760.0, y: 154.0 },
                 Position { x: 850.0, y: 154.0 },
                 Some("arc-blast".to_string()),
+                true,
             )
-            .expect("cast should use the current player position");
+            .expect("cast should use the current player position")
+            .expect("cast should produce an event");
 
         assert!(event.affected_players.contains(&target.id));
         assert!(world.get_player(&target.id).unwrap().health < 100.0);
@@ -1192,7 +1767,8 @@ mod tests {
             Position { x: 760.0, y: 154.0 },
             Position { x: 120.0, y: 154.0 },
             Some("arc-blast".to_string()),
+            false,
         );
-        assert!(out_of_range.is_none());
+        assert_eq!(out_of_range.unwrap_err(), "target is out of range");
     }
 }

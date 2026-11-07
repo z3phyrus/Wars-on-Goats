@@ -84,6 +84,30 @@ The hook runs the same formatting, Clippy, check, and test commands as CI before
 - Keep database integration and schema contracts isolated in `src/db.rs` and `spacetime-module/`.
 - Keep game design and planning notes in `game plans/` and the docs directory.
 
+## Adding a spell
+Spell definitions live in `src/spells.rs`. Each spell owns an `AbilityDefinition` for its name, cost (mana), range, cooldown, cast time, color, targeting, area, and default damage/status effects. The shared `Spell` trait in `src/game.rs` applies those defaults; implement `on_hit` to customize what happens to a target.
+
+To add one, create a struct implementing `Spell`, give it an `AbilityDefinition`, and add its ID to `spell_by_id` in `src/spells.rs`. The registry is explicit so unregistered client-provided IDs cannot select arbitrary spells. Nonzero cast times are tracked as pending casts: they cannot begin while moving, movement cancels them, and damage pushes progress back by 100 ms at most once per second. Mana and cooldown are applied on completion. Zero-time spells resolve instantly and can be cast while moving. For a spell that interrupts another cast, set `SpellHit.interrupt_cast` in its `on_hit` override; ordinary damage never interrupts.
+
+```rust
+impl Spell for PoisonBolt {
+    fn definition(&self) -> &AbilityDefinition {
+        &self.definition
+    }
+
+    fn on_hit(&self, _caster: &Player, target: &mut Player) -> SpellHit {
+        let mut hit = apply_default_spell_hit(self.definition(), target);
+        target.statuses.push(Status {
+            effect: StatusEffect::Poison,
+            duration_ms: 5_000,
+            intensity: 0.5,
+        });
+        hit.status_effects.push(StatusEffect::Poison);
+        hit
+    }
+}
+```
+
 ## SpacetimeDB module skeleton
 The repository now includes a first-pass module crate in `spacetime-module/` that defines the initial data model for players, rooms, and match state, along with reducer-style entry points for `join_room`, `start_match`, and `update_match_state`.
 

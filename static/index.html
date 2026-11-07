@@ -70,7 +70,9 @@
     </div>
     <div id="hud">
       <div>Health: <span id="healthLabel">100/100</span></div>
+      <div>Mana: <span id="manaLabel">100/100</span></div>
       <div>Cooldown: <span id="cooldownLabel">Ready</span></div>
+      <div>Spell: <span id="castMessage">Ready</span></div>
       <div>Target: <span id="targetLabel">-</span></div>
     </div>
     <canvas id="game" width="1024" height="240"></canvas>
@@ -81,7 +83,9 @@
       const startBtn = document.getElementById('startBtn');
       const resetBtn = document.getElementById('resetBtn');
       const healthLabel = document.getElementById('healthLabel');
+      const manaLabel = document.getElementById('manaLabel');
       const cooldownLabel = document.getElementById('cooldownLabel');
+      const castMessage = document.getElementById('castMessage');
       const targetLabel = document.getElementById('targetLabel');
 
       const GROUND_Y = 190;
@@ -105,7 +109,9 @@
         cooldownUntil: 0,
         lastTime: 0,
         castEffect: null,
-        castPending: false,
+        requestPending: false,
+        activeCast: null,
+        lastCastPoll: 0,
       };
 
       function clamp(value, min, max) {
@@ -115,6 +121,7 @@
       function updateHud() {
         if (!state.player) return;
         healthLabel.textContent = `${Math.max(0, Math.round(state.player.health))}/${Math.round(state.player.max_health)}`;
+        manaLabel.textContent = `${Math.max(0, Math.round(state.player.mana))}/${Math.round(state.player.max_mana)}`;
         cooldownLabel.textContent = performance.now() < state.cooldownUntil ? 'Cooling...' : 'Ready';
         const target = state.targets.find((t) => t.alive) || null;
         targetLabel.textContent = target ? `${target.name} (${Math.round(target.health)})` : 'none';
@@ -131,6 +138,8 @@
           onGround: true,
           health: 100,
           max_health: 100,
+          mana: payload.mana ?? 100,
+          max_mana: payload.max_mana ?? 100,
           alive: true,
         };
 
@@ -152,6 +161,10 @@
           .then((res) => res.json())
           .then((payload) => {
             state.playerId = payload.player_id;
+            state.requestPending = false;
+            state.activeCast = null;
+            state.castEffect = null;
+            castMessage.textContent = 'Ready';
             spawnPlayerFromPayload(payload);
             updateHud();
           })
@@ -177,12 +190,16 @@
                 onGround: true,
                 health: 100,
                 max_health: 100,
+                mana: payload.mana ?? 100,
+                max_mana: payload.max_mana ?? 100,
                 alive: true,
               };
               state.targets = payload.targets || state.targets;
               state.cooldownUntil = 0;
               state.castEffect = null;
-              state.castPending = false;
+              state.requestPending = false;
+              state.activeCast = null;
+              castMessage.textContent = 'Ready';
               updateHud();
             }
           });
@@ -190,9 +207,10 @@
 
       function sendInput({ cast = false } = {}) {
         if (!state.playerId) return;
-        if (cast && (performance.now() < state.cooldownUntil || state.castPending)) return;
+        if (state.requestPending) return;
+        if (cast && (performance.now() < state.cooldownUntil || state.activeCast)) return;
         const abilityId = cast ? 'arc-blast' : null;
-        if (abilityId) state.castPending = true;
+        state.requestPending = true;
         const castAim = { x: state.aim.x, y: state.aim.y };
         const payload = {
           player_id: state.playerId,
@@ -201,6 +219,11 @@
           aim_x: castAim.x,
           aim_y: castAim.y,
           ability_id: abilityId,
+          is_moving: state.keys.left
+            || state.keys.right
+            || state.keys.jump
+            || Math.abs(state.player.velocity.x) > 0.01
+            || Math.abs(state.player.velocity.y) > 0.01,
         };
 
         fetch('/solo/input', {
@@ -210,14 +233,42 @@
         })
           .then((res) => res.json())
           .then((result) => {
-            if (abilityId) state.castPending = false;
-            if (abilityId && Array.isArray(result.targets)) {
+            state.requestPending = false;
+            const wasCasting = Boolean(state.activeCast);
+            if (Array.isArray(result.targets)) {
               state.targets = result.targets;
             }
-            if (abilityId && result.cast_cooldown_remaining_ms > 0) {
+            if (state.player && typeof result.mana === 'number') {
+              state.player.mana = result.mana;
+              state.player.max_mana = result.max_mana ?? state.player.max_mana;
+            }
+            if (result.cast_pending) {
+              const total = result.cast_time_ms || 1;
+              state.activeCast = {
+                abilityId: result.cast_ability_id,
+                name: result.cast_name,
+                progress: result.cast_progress_ms || 0,
+                total,
+              };
+              const percentage = Math.round(state.activeCast.progress / total * 100);
+              castMessage.textContent = `Casting ${state.activeCast.name} (${percentage}%)`;
+              state.lastCastPoll = performance.now();
+            } else {
+              state.activeCast = null;
+              if (result.cast_error) {
+                castMessage.textContent = result.cast_error;
+              } else if (result.cast_completed) {
+                castMessage.textContent = result.event?.ability_name || 'Cast complete';
+              } else if (wasCasting) {
+                castMessage.textContent = 'Cast interrupted';
+              } else if (abilityId && !result.cast_succeeded) {
+                castMessage.textContent = 'Not cast';
+              }
+            }
+            if (result.cast_cooldown_remaining_ms > 0) {
               state.cooldownUntil = performance.now() + result.cast_cooldown_remaining_ms;
             }
-            if (abilityId && result.cast_succeeded) {
+            if (result.cast_completed) {
               state.castEffect = {
                 from: {
                   x: state.player.position.x,
@@ -227,12 +278,13 @@
                 startedAt: performance.now(),
                 travelDuration: 300,
                 impactDuration: 300,
+                color: result.event?.ability_color || '#fbbf24',
               };
             }
             updateHud();
           })
           .catch((error) => {
-            if (abilityId) state.castPending = false;
+            state.requestPending = false;
             console.error('Failed to send game input', error);
           });
       }
@@ -295,15 +347,17 @@
           ctx.beginPath();
           ctx.moveTo(effect.from.x, effect.from.y);
           ctx.lineTo(effect.to.x, effect.to.y);
-          ctx.strokeStyle = 'rgba(251, 191, 36, 0.35)';
+          ctx.strokeStyle = effect.color;
+          ctx.globalAlpha = 0.35;
           ctx.lineWidth = 2;
           ctx.stroke();
+          ctx.globalAlpha = 1;
 
           const projectileX = effect.from.x + (effect.to.x - effect.from.x) * progress;
           const projectileY = effect.from.y + (effect.to.y - effect.from.y) * progress;
           ctx.beginPath();
           ctx.arc(projectileX, projectileY, 6, 0, Math.PI * 2);
-          ctx.fillStyle = '#fbbf24';
+          ctx.fillStyle = effect.color;
           ctx.fill();
           return;
         }
@@ -315,9 +369,11 @@
         }
         ctx.beginPath();
         ctx.arc(effect.to.x, effect.to.y, 10 + impactProgress * 70, 0, Math.PI * 2);
-        ctx.strokeStyle = `rgba(251, 191, 36, ${1 - impactProgress})`;
+        ctx.strokeStyle = effect.color;
+        ctx.globalAlpha = 1 - impactProgress;
         ctx.lineWidth = 3;
         ctx.stroke();
+        ctx.globalAlpha = 1;
       }
 
       function render() {
@@ -382,6 +438,14 @@
           if (state.player.position.x > canvas.width) state.player.position.x = canvas.width;
         }
 
+        if (
+          state.activeCast
+          && !state.requestPending
+          && performance.now() - state.lastCastPoll >= 100
+        ) {
+          sendInput();
+        }
+
         render();
         updateHud();
         requestAnimationFrame(tick);
@@ -393,17 +457,31 @@
           sendInput({ cast: true });
           return;
         }
-        if (event.key === 'ArrowLeft' || key === 'a') state.keys.left = true;
-        if (event.key === 'ArrowRight' || key === 'd') state.keys.right = true;
-        if (event.key === ' ' || key === 'w' || key === 'arrowup') {
+        if ((event.key === 'ArrowLeft' || key === 'a') && !state.keys.left) {
+          state.keys.left = true;
+          sendInput();
+          return;
+        }
+        if ((event.key === 'ArrowRight' || key === 'd') && !state.keys.right) {
+          state.keys.right = true;
+          sendInput();
+          return;
+        }
+        if ((event.key === ' ' || key === 'w' || key === 'arrowup') && !event.repeat) {
           state.keys.jump = true;
           sendInput({ cast: false });
         }
       });
       window.addEventListener('keyup', (event) => {
         const key = event.key.toLowerCase();
-        if (event.key === 'ArrowLeft' || key === 'a') state.keys.left = false;
-        if (event.key === 'ArrowRight' || key === 'd') state.keys.right = false;
+        if (event.key === 'ArrowLeft' || key === 'a') {
+          state.keys.left = false;
+          sendInput();
+        }
+        if (event.key === 'ArrowRight' || key === 'd') {
+          state.keys.right = false;
+          sendInput();
+        }
         if (event.key === ' ' || key === 'w' || key === 'arrowup') {
           state.keys.jump = false;
         }
